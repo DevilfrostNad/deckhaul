@@ -83,6 +83,7 @@ echo "Из Konsole: $BIN/deckhaul check — отчёт о проблемах б�
 
 if [ "${1:-}" = "--add-to-steam" ] && command -v steamos-add-to-steam >/dev/null; then
   steamos-add-to-steam "$DESKTOP" && echo "Добавлено в библиотеку Steam: откройте игровой режим и найдите DeckHaul."
-else
-  echo "Чтобы запускать из игрового режима: ./install.sh --add-to-steam"
+elif command -v steamos-add-to-steam >/dev/null; then
+  echo "Чтобы запускать из игрового режима, добавьте DeckHaul в Steam:"
+  echo "  steamos-add-to-steam $DESKTOP"
 fi
