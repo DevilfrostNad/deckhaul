@@ -110,6 +110,88 @@ class _FakeDeck(unittest.TestCase):
         shutil.rmtree(self.home)
 
 
+def make_flagged_zip(path, files, flagged):
+    """A zip whose members in `flagged` carry the 'encrypted' bit over plain data,
+    like 'protected' mods do. The game ignores the bit; Python refuses to read."""
+    import struct
+    import zipfile
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, d in files.items():
+            z.writestr(n, d)
+    with zipfile.ZipFile(path) as z:
+        offsets = {i.filename: i.header_offset for i in z.infolist()}
+    data = bytearray(open(path, "rb").read())
+    for name in flagged:
+        off = offsets[name]
+        struct.pack_into("<H", data, off + 6, struct.unpack_from("<H", data, off + 6)[0] | 1)
+        pos = data.find(b"PK\x01\x02")
+        while pos >= 0:
+            nlen = struct.unpack_from("<H", data, pos + 28)[0]
+            if data[pos + 46: pos + 46 + nlen].decode() == name:
+                struct.pack_into("<H", data, pos + 8, struct.unpack_from("<H", data, pos + 8)[0] | 1)
+            pos = data.find(b"PK\x01\x02", pos + 4)
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+class StrangeMods(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def test_encrypted_flag_on_plain_manifest(self):
+        import zipfile
+        from fixture import manifest
+        from deckhaul.mods import Mod, inspect_safely
+        p = os.path.join(self.tmp, "mercedes_actros_mp4_radio_addon.scs")
+        make_flagged_zip(p, {
+            "manifest.sii": manifest("Actros MP4 Radio Addon", "1.1", cats=("truck",)),
+            "def/vehicle/truck/mercedes.actros2014/radio.sii": "SiiNunit { }",
+        }, flagged=["manifest.sii"])
+        with zipfile.ZipFile(p) as z, self.assertRaises(RuntimeError):
+            z.read("manifest.sii")                                  # what used to break the scan
+        m = inspect_safely(Mod(key="radio", source="local", path=p))
+        self.assertEqual((m.name, m.version), ("Actros MP4 Radio Addon", "1.1"))
+        self.assertEqual(m.scan_problems, [])
+        self.assertEqual(len(m.hashes), 1)
+
+    def test_zip_bomb_is_not_unpacked(self):
+        import zipfile
+        from deckhaul.archive import open_container, ArchiveError
+        from fixture import manifest
+        from deckhaul.mods import Mod, inspect_safely
+        p = os.path.join(self.tmp, "bomb.scs")
+        with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("manifest.sii", manifest("Bomb", "1"))
+            z.writestr("def/zeros.bin", b"\0" * (40 << 20))      # 40 MB that packs into ~40 KB
+        self.assertLess(os.path.getsize(p), 1 << 20)
+        with open_container(p) as c:
+            self.assertIsNone(c.test())                             # skipped, not unpacked
+            with self.assertRaises(ArchiveError):
+                c.read("def/zeros.bin")
+        t = time.time()
+        m = inspect_safely(Mod(key="bomb", source="local", path=p))
+        self.assertLess(time.time() - t, 2)
+        self.assertEqual(m.name, "Bomb")
+
+    def test_inspector_timeout_skips_mod(self):
+        from fixture import make_zip, manifest
+        from deckhaul.mods import Inspector, Mod
+        p = os.path.join(self.tmp, "ok.scs")
+        make_zip(p, {"manifest.sii": manifest("Fine Mod", "2"), "def/x.sii": "x"})
+        slow = Inspector(timeout=0.0001)
+        m = slow.inspect(Mod(key="ok", source="local", path=p))
+        slow.close()
+        self.assertEqual(m.scan_problems[0][0], "unreadable")
+        fast = Inspector(timeout=60)
+        m = fast.inspect(Mod(key="ok", source="local", path=p))
+        m2 = fast.inspect(Mod(key="ok", source="local", path=p))     # the worker is reused
+        fast.close()
+        self.assertEqual((m.name, m.scan_problems, m2.name), ("Fine Mod", [], "Fine Mod"))
+
+
 class EndToEnd(_FakeDeck):
 
     def test_full_flow(self):

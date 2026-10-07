@@ -107,7 +107,7 @@ def check_all(
         is_active = m.key in active_keys
         for code, text in m.scan_problems:
             sev = ERROR if (is_active or code in ("broken_archive", "nested_archive", "nested_folder")) else WARNING
-            if code == "unknown_layout":
+            if code in ("unknown_layout", "unreadable"):
                 sev = WARNING
             issues.append(Issue(code, sev, f"«{m.name}»: {text}", fix=_FIXES.get(code, ""), mod=m.key))
         comp = m.compatible_with(game_version, full_version)
@@ -168,6 +168,7 @@ _FIXES = {
     "nested_folder": "Перепакуйте мод без лишней папки или распакуйте его папкой в mod.",
     "manifest_broken": "Сообщите автору мода или скачайте другую версию.",
     "unknown_layout": "Проверьте, что это действительно мод для ETS2, а не архив с инструкцией.",
+    "unreadable": "Если в игре мод работает, ничего делать не нужно. Если нет, скачайте его заново.",
     "workshop_empty": "В Steam: свойства игры → Установленные файлы → Проверить целостность.",
 }
 

@@ -12,6 +12,7 @@ enough to find overlaps between two mods.
 
 from __future__ import annotations
 
+import mmap
 import os
 import struct
 import zipfile
@@ -21,6 +22,11 @@ from typing import Dict, List, Optional
 from .cityhash import hash_path
 
 HASHFS_MAGIC = b"SCS#"
+# Some mods are "protected" with entries that unpack to gigabytes (zip bombs).
+# The game never touches them; we must not either. Everything DeckHaul reads
+# from an archive (manifest, description, icon, directory listings) is small.
+MAX_READ = 32 << 20
+CRC_BUDGET = 256 << 20
 ZIP_MAGIC = b"PK"
 
 
@@ -132,22 +138,60 @@ class ZipContainer(Container):
             if real is None:
                 return None
             try:
-                return self.zf.read(real)
-            except (zipfile.BadZipFile, zlib.error, OSError, NotImplementedError) as exc:
+                info = self.zf.getinfo(real)
+                if info.file_size > MAX_READ:
+                    raise ArchiveError(f"файл {key} внутри архива слишком большой")
+                if info.flag_bits & 0x1:
+                    # "Protected" mods set the encryption flag on plain data. The game
+                    # ignores the flag; Python refuses to read. Read it the game's way.
+                    return self._read_flagged(info, key)
+                with self.zf.open(info) as fh:
+                    data = fh.read(MAX_READ + 1)
+                if len(data) > MAX_READ:
+                    raise ArchiveError(f"файл {key} внутри архива слишком большой")
+                return data
+            except (zipfile.BadZipFile, zlib.error, OSError, NotImplementedError, RuntimeError) as exc:
                 raise ArchiveError(f"не удалось распаковать {key}: {exc}")
         entry = self._raw.get(key) if self._raw else None
         if entry is None:
             return None
         return _read_raw_entry(self.path, entry)
 
+    def _read_flagged(self, info, key: str) -> bytes:
+        with open(self.path, "rb") as fh:
+            fh.seek(info.header_offset)
+            head = fh.read(30)
+            if len(head) < 30 or head[:4] != b"PK\x03\x04":
+                raise ArchiveError(f"не удалось прочитать {key}: повреждён заголовок")
+            nlen, xlen = struct.unpack_from("<HH", head, 26)
+            start = info.header_offset + 30 + nlen + xlen
+        try:
+            return _read_raw_entry(self.path, (start, info.compress_size, info.file_size, info.compress_type))
+        except (zlib.error, ArchiveError):
+            raise ArchiveError(f"{key} внутри архива действительно зашифрован, прочитать его нельзя")
+
     def test(self) -> Optional[str]:
-        """Return the first broken member name, or None if CRCs are fine."""
+        """Return the first broken member name, or None if CRCs are fine.
+        Reads at most CRC_BUDGET bytes and skips members that look like zip bombs."""
         if self.zf is None:
             return None
-        try:
-            return self.zf.testzip()
-        except Exception as exc:  # zlib errors surface as many types
-            return str(exc)
+        budget = CRC_BUDGET
+        for info in self.zf.infolist():
+            if info.is_dir():
+                continue
+            ratio = info.file_size / max(info.compress_size, 1)
+            if info.file_size > budget or (info.file_size > (16 << 20) and ratio > 100):
+                return None          # not worth it, or a deliberate trap: stop checking
+            budget -= info.file_size
+            if info.flag_bits & 0x1:
+                continue
+            try:
+                with self.zf.open(info) as fh:
+                    while fh.read(1 << 20):
+                        pass
+            except Exception:  # zlib errors surface as many types
+                return info.filename
+        return None
 
     def file_hashes(self) -> Dict[int, Optional[str]]:
         return {hash_path(n): n for n in self.names}
@@ -168,7 +212,10 @@ class ZipContainer(Container):
 def _scan_local_headers(path: str) -> Dict[str, tuple]:
     out: Dict[str, tuple] = {}
     with open(path, "rb") as fh:
-        data = fh.read()
+        try:
+            data = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)  # no copy of a 2 GB file
+        except (ValueError, OSError):
+            data = fh.read()
     pos = 0
     while True:
         pos = data.find(b"PK\x03\x04", pos)
@@ -191,9 +238,12 @@ def _read_raw_entry(path: str, entry: tuple) -> bytes:
         fh.seek(start)
         blob = fh.read(csize)
     if method == 0:
-        return blob
+        return blob[:MAX_READ]
     if method == 8:
-        return zlib.decompressobj(-15).decompress(blob)
+        data = zlib.decompressobj(-15).decompress(blob, MAX_READ + 1)
+        if len(data) > MAX_READ:
+            raise ArchiveError("файл внутри архива слишком большой")
+        return data
     raise ArchiveError(f"неизвестный метод сжатия ZIP: {method}")
 
 
@@ -300,9 +350,15 @@ class HashFsContainer(Container):
     def _content(self, e: _Entry) -> bytes:
         if not e.readable:
             raise ArchiveError("содержимое этого файла упаковано особым образом")
+        if e.size > MAX_READ or e.csize > MAX_READ:
+            raise ArchiveError("файл внутри архива слишком большой")
         self.fh.seek(e.offset)
         if e.compressed:
-            return zlib.decompress(self.fh.read(e.csize))
+            d = zlib.decompressobj()
+            data = d.decompress(self.fh.read(e.csize), MAX_READ + 1)
+            if len(data) > MAX_READ or d.unconsumed_tail:
+                raise ArchiveError("файл внутри архива слишком большой")
+            return data
         return self.fh.read(e.size)
 
     def _hash(self, path: str) -> int:

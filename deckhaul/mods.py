@@ -354,6 +354,7 @@ def scan(mod_dir: str, workshop_dirs: List[str], cache: ScanCache,
                 ws_items.append((ws_root, wid))
     total = len(cands) + len(ws_items)
     done = 0
+    inspector = Inspector()
 
     def tick(name):
         nonlocal done
@@ -363,7 +364,7 @@ def scan(mod_dir: str, workshop_dirs: List[str], cache: ScanCache,
 
     for key, path in cands:
         tick(os.path.basename(path))
-        mods.append(_load(Mod(key=key, source="local", path=path, name=key), cache))
+        mods.append(_load(Mod(key=key, source="local", path=path, name=key), cache, inspector))
         if done % 20 == 0:
             cache.save()                 # a long first scan survives being interrupted
 
@@ -387,14 +388,15 @@ def scan(mod_dir: str, workshop_dirs: List[str], cache: ScanCache,
             continue
         m = Mod(key=key, source="workshop", path=payload, name=f"Workshop {wid}",
                 workshop_id=int(wid), workshop_slot=slot)
-        mods.append(_load(m, cache))
+        mods.append(_load(m, cache, inspector))
+    inspector.close()
     if progress:
         progress(total, total, "")
     cache.save()
     return ScanResult(mods, junk, read_workshop_state(acf_paths or []))
 
 
-def _load(mod: Mod, cache: ScanCache) -> Mod:
+def _load(mod: Mod, cache: ScanCache, inspector: Optional[Inspector] = None) -> Mod:
     try:
         size, mtime = _stat(mod.path)
     except OSError as exc:
@@ -408,6 +410,111 @@ def _load(mod: Mod, cache: ScanCache) -> Mod:
         fresh.workshop_id, fresh.workshop_slot = mod.workshop_id, mod.workshop_slot
         fresh.scan_problems = [tuple(p) for p in fresh.scan_problems]  # type: ignore[misc]
         return fresh
-    inspect(mod)
+    if inspector is not None:
+        mod = inspector.inspect(mod)
+    else:
+        inspect_safely(mod)
     cache.put(mod.path, size, mtime, mod)
     return mod
+
+
+INSPECT_TIMEOUT = 120          # seconds per mod
+WORKER_MEMORY = 3 << 30        # bytes; a zip bomb hits this instead of the Deck's RAM
+
+
+def _worker(conn) -> None:
+    """Runs in a child process: inspect mods one by one, sent over a pipe."""
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (WORKER_MEMORY, WORKER_MEMORY))
+    except (ImportError, ValueError, OSError):
+        pass  # not supported here (macOS); the time limit still applies
+    while True:
+        try:
+            data = conn.recv()
+        except EOFError:
+            return
+        if data is None:
+            return
+        mod = Mod(**data)
+        mod.scan_problems = [tuple(p) for p in mod.scan_problems]
+        try:
+            inspect_safely(mod)
+        except MemoryError:
+            mod.scan_problems.append(("unreadable", "мод слишком тяжёлый для проверки"))
+        conn.send(asdict(mod))
+
+
+class Inspector:
+    """Inspects mods in a separate process so that one strange file cannot hang
+    or exhaust the whole program. Falls back to in-process inspection."""
+
+    def __init__(self, timeout: float = INSPECT_TIMEOUT):
+        self.timeout = timeout
+        self.proc = None
+        self.conn = None
+
+    def _start(self) -> bool:
+        try:
+            import multiprocessing as mp
+            ctx = mp.get_context("spawn")
+            parent, child = ctx.Pipe()
+            proc = ctx.Process(target=_worker, args=(child,), daemon=True)
+            proc.start()
+            child.close()
+            self.proc, self.conn = proc, parent
+            return True
+        except Exception:  # noqa: BLE001 — no subprocesses here: inspect in place
+            self.proc = self.conn = None
+            return False
+
+    def inspect(self, mod: Mod) -> Mod:
+        if self.proc is None or not self.proc.is_alive():
+            if not self._start():
+                return inspect_safely(mod)
+        try:
+            self.conn.send(asdict(mod))
+            if self.conn.poll(self.timeout):
+                data = self.conn.recv()
+                fresh = Mod(**data)
+                fresh.scan_problems = [tuple(p) for p in fresh.scan_problems]
+                return fresh
+        except (EOFError, OSError, BrokenPipeError):
+            pass  # the worker died (out of memory, crash): report below
+        self.close()
+        mod.scan_problems.append((
+            "unreadable",
+            f"DeckHaul не смог прочитать этот мод за {int(self.timeout)} секунд или ему не хватило памяти, "
+            "проверка пропущена. Игра, возможно, читает его нормально",
+        ))
+        if not mod.name:
+            mod.name = mod.key
+        return mod
+
+    def close(self) -> None:
+        if self.conn is not None:
+            try:
+                self.conn.send(None)
+            except (OSError, BrokenPipeError):
+                pass
+            self.conn.close()
+        if self.proc is not None:
+            self.proc.join(timeout=1)
+            if self.proc.is_alive():
+                self.proc.kill()
+        self.proc = self.conn = None
+
+
+def inspect_safely(mod: Mod) -> Mod:
+    """inspect() that can never stop the whole scan: any surprise in one file
+    becomes a problem of that mod."""
+    try:
+        return inspect(mod)
+    except Exception as exc:  # noqa: BLE001 — a strange file must not break the scan
+        mod.scan_problems.append((
+            "unreadable", f"DeckHaul не смог прочитать этот мод ({type(exc).__name__}: {exc}). "
+            "Игра, возможно, читает его нормально",
+        ))
+        if not mod.name:
+            mod.name = mod.key
+        return mod
