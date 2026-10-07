@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeckHaul</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+</head>
+<body>
+<header class="top">
+  <div class="brand">DeckHaul</div>
+  <label class="field">
+    <span class="field-label">Профиль</span>
+    <select id="profile" aria-label="Профиль игры"></select>
+  </label>
+  <div class="game" id="game"></div>
+  <button id="refresh" class="btn">Обновить</button>
+</header>
+
+<div id="banner" class="banner" hidden></div>
+
+<nav class="tabs" role="tablist" aria-label="Разделы">
+  <button role="tab" data-tab="issues" aria-selected="true">Проблемы <span class="count" id="c-issues"></span></button>
+  <button role="tab" data-tab="order">Порядок <span class="count" id="c-order"></span></button>
+  <button role="tab" data-tab="mods">Все моды <span class="count" id="c-mods"></span></button>
+  <button role="tab" data-tab="history">Изменения <span class="count" id="c-history"></span></button>
+  <button role="tab" data-tab="backups">Копии профиля</button>
+</nav>
+
+<main>
+  <section id="tab-issues" class="tab" role="tabpanel"></section>
+
+  <section id="tab-order" class="tab" role="tabpanel" hidden>
+    <div class="order-layout">
+      <div class="order-main">
+        <p class="hint">Верхний мод в списке главнее: его файлы заменяют файлы модов ниже.
+          Нажмите на мод, чтобы взять его, стрелками или кнопками ▲▼ переместите и нажмите ещё раз.</p>
+        <ol id="order-list" class="order-list" aria-label="Порядок включённых модов"></ol>
+      </div>
+      <aside class="order-side">
+        <div id="details" class="details"></div>
+        <h2>Выключенные моды</h2>
+        <input id="off-search" class="search" type="search" placeholder="Найти мод" aria-label="Поиск по выключенным модам">
+        <ul id="off-list" class="off-list"></ul>
+      </aside>
+    </div>
+    <div class="actionbar">
+      <span id="dirty" class="dirty" aria-live="polite"></span>
+      <button id="autosort" class="btn">Упорядочить</button>
+      <button id="revert" class="btn">Вернуть как было</button>
+      <button id="apply" class="btn primary">Сохранить в профиль</button>
+    </div>
+  </section>
+
+  <section id="tab-mods" class="tab" role="tabpanel" hidden>
+    <div class="filters">
+      <input id="mods-search" class="search" type="search" placeholder="Название, автор или файл" aria-label="Поиск модов">
+      <select id="mods-filter" aria-label="Какие моды показать">
+        <option value="all">Все</option>
+        <option value="on">Включённые</option>
+        <option value="off">Выключенные</option>
+        <option value="problems">С проблемами</option>
+        <option value="workshop">Из Workshop</option>
+        <option value="local">Из папки mod</option>
+      </select>
+    </div>
+    <table class="mods-table">
+      <thead><tr><th>Мод</th><th>Версия</th><th>Категория</th><th>Совместимость</th><th>Источник</th></tr></thead>
+      <tbody id="mods-body"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-history" class="tab" role="tabpanel" hidden>
+    <div class="filters">
+      <button id="online" class="btn">Проверить обновления в Workshop</button>
+      <span class="hint">Отправит в Steam только номера модов из Workshop.</span>
+    </div>
+    <ul id="events" class="events"></ul>
+  </section>
+
+  <section id="tab-backups" class="tab" role="tabpanel" hidden>
+    <div class="filters">
+      <button id="backup-now" class="btn">Сделать копию сейчас</button>
+      <span class="hint">Копия создаётся сама перед каждым сохранением и восстановлением.</span>
+    </div>
+    <ul id="backups" class="backups"></ul>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<dialog id="dialog">
+  <h2 id="dialog-title"></h2>
+  <div id="dialog-body"></div>
+  <form method="dialog"><button class="btn">Закрыть</button></form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "id": "zoom-crash-fix-top",
+      "text": "фикс вылета при масштабировании карты ставится в самый верх (рекомендация ProMods)",
+      "pin": "top",
+      "match": ["*zoom*crash*fix*", "*zoom*fix*"]
+    },
+    {
+      "id": "background-map-top",
+      "text": "фон карты мира ставится наверх, чтобы перекрыть фон из карт-модов",
+      "pin": "top",
+      "match": ["*background*map*"]
+    },
+    {
+      "id": "promods-def-above",
+      "text": "файл определений ProMods (def) должен стоять выше остальных частей ProMods",
+      "above": ["*promods*def*"],
+      "below": ["promods-*", "*promods*map*", "*promods*model*", "*promods*media*", "*promods*assets*"]
+    },
+    {
+      "id": "road-connection-above-maps",
+      "text": "соединители дорог между картами стоят выше самих карт",
+      "above": ["*road*connect*", "*rc*fix*"],
+      "below": ["cat:map"]
+    },
+    {
+      "id": "sound-fix-above-sound",
+      "text": "исправления к звуковым модам стоят выше самих звуковых модов",
+      "above": ["*sound*fix*", "*sound*patch*"],
+      "below": ["cat:sound"]
+    },
+    {
+      "id": "compat-patch-above",
+      "text": "патчи совместимости ставятся выше модов, которые они связывают",
+      "above": ["*compat*patch*", "*compatibility*"],
+      "below": ["cat:map", "cat:truck", "cat:ai_traffic", "cat:trailer"]
+    }
+  ]
+}
