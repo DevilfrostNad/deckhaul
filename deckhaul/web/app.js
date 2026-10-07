@@ -168,6 +168,9 @@ function issueActions(i) {
     out.push(`<button class="btn small" data-act="rollback" data-point="${esc(i.extra.point)}">Вернуть как было</button>`);
     out.push(`<button class="btn small" data-act="ack" data-point="${esc(i.extra.point)}">Всё в порядке</button>`);
   }
+  if (i.action === "switch_workshop") out.push(`<button class="btn small" data-act="switch-ws" data-local="${esc(i.extra.local)}" data-ws="${esc(i.extra.workshop)}">Переключиться на Workshop</button>`);
+  if (i.code === "incompatible" && i.extra.source) out.push(`<a class="btn small" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(i.extra.source)}">Страница мода</a>`);
+  if (i.code === "incompatible" && !i.extra.workshop_id && i.mod) out.push(`<button class="btn small" data-act="ws-find" data-key="${esc(i.mod)}">Найти в Workshop</button>`);
   if (i.action === "compat_ok") out.push(`<button class="btn small" data-act="compat-ok" data-key="${esc(i.mod)}">Работает, не предупреждать</button>`);
   if (i.action === "autosort") out.push(`<button class="btn small" data-act="autosort">Упорядочить</button>`);
   if (i.code === "conflict") out.push(`<button class="btn small" data-act="conflicts" data-key="${esc(i.mod)}">Какие файлы</button>`);
@@ -300,6 +303,17 @@ function renderDetails() {
     ${m.missing ? "" : `
     <label>Группа в порядке<select id="d-group">${groupOpts}</select></label>
     ${others.length ? `<label>Всегда ставить выше мода<select id="d-rule"><option value="">Выберите мод</option>${others.map((k) => `<option value="${esc(k)}">${esc(byKey[k].name)}</option>`).join("")}</select></label>` : ""}`}
+    ${m.missing ? "" : m.source === "workshop" ? `<p class="meta">Обновления приходят из Steam Workshop автоматически.</p>` : `
+    <form class="src-form" data-key="${esc(m.key)}">
+      <label>Где обновлять: страница мода
+        <input class="search" name="url" type="url" placeholder="https://…" value="${esc(m.source_url || "")}">
+      </label>
+      <div class="btns">
+        <button class="btn small" type="submit">Сохранить ссылку</button>
+        ${m.source_url ? `<a class="btn small" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(m.source_url)}">Открыть страницу</a>` : ""}
+        <button class="btn small" type="button" data-act="ws-find" data-key="${esc(m.key)}">Найти в Workshop</button>
+      </div>
+    </form>`}
     <div class="btns">
       ${m.compat === false && !m.missing ? (m.compat_ok
         ? `<button class="btn small" data-act="compat-undo" data-key="${esc(m.key)}">Снять отметку «работает»</button>`
@@ -337,15 +351,22 @@ function renderMods() {
     .filter((m) => !q || [m.name, m.author, m.key, m.path].join(" ").toLowerCase().includes(q))
     .filter((m) => f === "all" || (f === "on" && on.has(m.key)) || (f === "off" && !on.has(m.key)) ||
       (f === "problems" && problem.has(m.key)) || (f === "workshop" && m.source === "workshop") ||
-      (f === "local" && m.source === "local"))
+      (f === "local" && m.source === "local") || (f === "update" && m.needs_update))
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
   $("mods-body").innerHTML = rows.map((m) => `<tr>
-      <td><div>${esc(m.name)} ${problem.has(m.key) ? `<span class="flag-warning">▲</span>` : ""}</div><div class="meta">${esc(m.author || "")}</div></td>
+      <td><div><button class="linkish" data-act="show" data-key="${esc(m.key)}">${esc(m.name)}</button> ${problem.has(m.key) ? `<span class="flag-warning">▲</span>` : ""}</div><div class="meta">${esc(m.author || "")}</div></td>
       <td>${esc(m.version || "—")}</td>
       <td>${esc(CATEGORY[m.category] || m.category)}</td>
       <td>${m.compat === false ? (m.compat_ok ? "✓ проверен вами" : `<span class="flag-warning">▲ для ${esc(m.compatible.join(", "))}</span>`) : m.compat ? "✓ да" : "не указана"}</td>
       <td>${m.source === "workshop" ? "Workshop" : "папка mod"}${on.has(m.key) ? ` · <span class="state-on">включён</span>` : ""}</td>
-    </tr>`).join("") || `<tr><td colspan="5" class="empty">Ничего не нашлось</td></tr>`;
+      <td>${m.source === "workshop" ? `<span class="meta">обновляет Steam</span>`
+        : m.source_url ? `<a href="${esc(m.source_url)}" target="_blank" rel="noopener">${esc(hostOf(m.source_url))}</a>`
+        : `<button class="linkish meta" data-act="show" data-key="${esc(m.key)}">указать</button>`}</td>
+    </tr>`).join("") || `<tr><td colspan="6" class="empty">Ничего не нашлось</td></tr>`;
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch (e) { return url; }
 }
 
 function renderHistory() {
@@ -575,8 +596,104 @@ $("profile").addEventListener("change", (e) => {
 $("online").addEventListener("click", () => run("Спрашиваю Steam", async () => {
   const r = await api("/api/online", {});
   setState(r.state, true);
+  renderWorkshopStatus(r.workshop);
   toast(`Проверено модов из Workshop: ${r.checked}. Результат — на вкладке «Проблемы».`, 6000);
 }));
+
+// ------------------------------------------------- workshop: daily check
+let WS = null;
+function renderWorkshopStatus(st) {
+  WS = st || WS;
+  if (!WS) return;
+  $("ws-auto").checked = WS.auto;
+  $("ws-status").textContent = WS.checked ? `Проверено ${fmtDate(WS.checked)}. Steam получает только номера модов из Workshop.`
+    : "Ещё не проверялось. Steam получает только номера модов из Workshop.";
+}
+async function workshopAuto() {
+  try {
+    const st = await api("/api/workshop/auto");
+    renderWorkshopStatus(st);
+    if (st.ran) setState(await api("/api/state"), true);
+  } catch (e) { /* offline: try next time */ }
+}
+$("ws-auto").addEventListener("change", (e) => run("Сохраняю", async () => {
+  renderWorkshopStatus(await api("/api/workshop/auto-set", { on: e.target.checked }));
+}));
+
+// ------------------------------------------- workshop: find a local mod
+function keyForm(after) {
+  $("dialog-title").textContent = "Нужен ключ Steam Web API";
+  $("dialog-body").innerHTML = `
+    <p>Steam разрешает искать в Workshop только с ключом. Он бесплатный и привязан к вашему аккаунту.</p>
+    <ol class="steps">
+      <li>Откройте <a href="https://steamcommunity.com/dev/apikey" target="_blank" rel="noopener">steamcommunity.com/dev/apikey</a> и войдите в Steam.</li>
+      <li>В поле «Domain Name» впишите <b>localhost</b>, согласитесь с условиями и нажмите «Register».</li>
+      <li>Скопируйте ключ из 32 символов и вставьте сюда.</li>
+    </ol>
+    <form id="key-form" class="dir-form">
+      <input id="key-input" class="search" type="password" autocomplete="off" spellcheck="false" aria-label="Ключ Steam Web API" placeholder="Ключ из 32 символов">
+      <button class="btn small primary" type="submit">Сохранить ключ</button>
+    </form>
+    <p class="meta">Ключ хранится только на этом устройстве, в настройках DeckHaul. В поиск уходит только название мода.</p>`;
+  $("key-form").onsubmit = (e) => {
+    e.preventDefault();
+    run("Сохраняю ключ", async () => {
+      WS = await api("/api/steam-key", { key: $("key-input").value });
+      await after();
+    });
+  };
+  if (!$("dialog").open) $("dialog").showModal();
+}
+
+async function findInWorkshop(key) {
+  if (!WS || !WS.has_key) return keyForm(() => findInWorkshop(key));
+  await run("Ищу в Workshop", async () => {
+    let r;
+    try {
+      r = await api("/api/workshop/find", { key });
+    } catch (e) {
+      if (/ключ/i.test(e.message)) { toast(e.message, 6000); return keyForm(() => findInWorkshop(key)); }
+      throw e;
+    }
+    $("dialog-title").textContent = `«${r.mod}» в Steam Workshop`;
+    const rows = r.results.map((f) => `<li class="ws-item">
+        ${f.preview ? `<img src="${esc(f.preview)}" alt="" loading="lazy">` : `<span class="thumb"></span>`}
+        <span style="min-width:0">
+          <div><b>${esc(f.title)}</b> ${f.score >= 0.5 ? `<span class="state-on">похоже на ваш мод</span>` : ""}</div>
+          <div class="meta">обновлён ${fmtDate(f.updated)} · подписчиков: ${f.subscriptions.toLocaleString("ru-RU")}</div>
+          <div class="meta">${esc(f.description)}</div>
+        </span>
+        <span class="pt-btns">
+          ${f.installed ? `<span class="meta">вы уже подписаны</span>`
+            : `<a class="btn small primary" style="display:inline-flex;align-items:center;text-decoration:none" href="${esc(f.steam_url)}">Открыть в Steam</a>`}
+          <a class="btn small" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(f.url)}">В браузере</a>
+        </span>
+      </li>`).join("");
+    $("dialog-body").innerHTML = rows
+      ? `<p class="hint">Поиск по запросу «${esc(r.query)}». Если подпишетесь, Steam скачает мод, и DeckHaul предложит включить его вместо локальной копии.</p><ul class="ws-list">${rows}</ul>`
+      : `<p>В Workshop ничего не нашлось по запросу «${esc(r.query)}». Этот мод, похоже, есть только на сайтах.</p>`;
+    if (!$("dialog").open) $("dialog").showModal();
+  });
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.act === "ws-find") return findInWorkshop(t.dataset.key);
+  if (t.dataset.act === "switch-ws") return run("Переключаю", async () => {
+    setState(await api("/api/workshop/switch", { local: t.dataset.local, workshop: t.dataset.ws }));
+    toast("Готово: теперь работает копия из Workshop. Вернуть как было можно на вкладке «Точки восстановления».", 7000);
+  });
+});
+document.addEventListener("submit", (e) => {
+  const f = e.target.closest(".src-form");
+  if (!f) return;
+  e.preventDefault();
+  run("Сохраняю ссылку", async () => {
+    setState(await api("/api/source", { key: f.dataset.key, url: f.elements.url.value }), true);
+    toast(f.elements.url.value ? "Ссылка сохранена. Когда мод устареет, DeckHaul напомнит, где брать обновление." : "Ссылка убрана.");
+  });
+});
 $("point-form").addEventListener("submit", (e) => {
   e.preventDefault();
   run("Сохраняю состояние", async () => {
@@ -907,4 +1024,4 @@ document.addEventListener("click", (e) => {
 });
 
 setInterval(() => fetch("/api/ping").catch(() => {}), 30000);
-load().then(() => { loadDownloads(false); loadUpdate(); }).catch((e) => toast(e.message, 0));
+load().then(() => { loadDownloads(false); loadUpdate(); workshopAuto(); }).catch((e) => toast(e.message, 0));

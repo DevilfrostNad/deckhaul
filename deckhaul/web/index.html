@@ -77,10 +77,11 @@
         <option value="problems">С проблемами</option>
         <option value="workshop">Из Workshop</option>
         <option value="local">Из папки mod</option>
+        <option value="update">Нужно обновить</option>
       </select>
     </div>
     <table class="mods-table">
-      <thead><tr><th>Мод</th><th>Версия</th><th>Категория</th><th>Совместимость</th><th>Источник</th></tr></thead>
+      <thead><tr><th>Мод</th><th>Версия</th><th>Категория</th><th>Совместимость</th><th>Источник</th><th>Где обновлять</th></tr></thead>
       <tbody id="mods-body"></tbody>
     </table>
   </section>
@@ -89,7 +90,8 @@
     <div id="update" class="update"></div>
     <div class="filters">
       <button id="online" class="btn">Проверить обновления в Workshop</button>
-      <span class="hint">Отправит в Steam только номера модов из Workshop.</span>
+      <label class="check"><input type="checkbox" id="ws-auto" checked> Проверять раз в день</label>
+      <span id="ws-status" class="hint" style="margin:0"></span>
     </div>
     <ul id="events" class="events"></ul>
   </section>

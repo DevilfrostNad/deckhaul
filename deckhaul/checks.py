@@ -218,6 +218,20 @@ def _check_duplicates(mods: List[Mod], active_keys) -> List[Issue]:
         if len(items) < 2:
             continue
         on = [m for m in items if m.key in active_keys]
+        ws = [m for m in items if m.source == "workshop"]
+        local_on = [m for m in on if m.source == "local"]
+        if ws and local_on:
+            loc, w = local_on[0], ws[0]
+            out.append(Issue(
+                "local_has_workshop", WARNING if len(on) > 1 else INFO,
+                f"У «{loc.name}» есть копия из Workshop",
+                f"Включена копия из папки mod ({loc.version or 'версия не указана'}), а в Workshop "
+                f"у вас есть {w.version or 'версия без номера'}. Копию из Workshop Steam обновляет сам.",
+                "Переключитесь на Workshop: DeckHaul поставит её на место локальной в порядке, "
+                "а локальный файл уберёт в корзину. Вернуть как было можно на вкладке «Точки восстановления».",
+                mod=loc.key, action="switch_workshop", extra={"local": loc.key, "workshop": w.key},
+            ))
+            continue
         vers = ", ".join(f"{m.version or '?'} ({'Workshop' if m.source == 'workshop' else m.key})" for m in items)
         if len(on) > 1:
             out.append(Issue(

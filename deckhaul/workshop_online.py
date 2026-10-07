@@ -1,7 +1,10 @@
-"""Optional online check against the public Steam Web API (no key needed).
+"""Steam Web API calls.
 
-Only workshop item ids are sent. Used to spot items removed from the
-Workshop and updates Steam has not downloaded yet.
+fetch_details needs no key and sends only workshop item ids: it spots items
+removed from the Workshop and updates Steam has not downloaded yet.
+
+search needs the user's own Web API key and sends the mod name: it looks for
+a Workshop copy of a mod installed from a website.
 """
 
 from __future__ import annotations
@@ -12,6 +15,8 @@ import urllib.request
 from typing import Dict, List
 
 URL = "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/"
+QUERY_URL = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/"
+RANKED_BY_TEXT_SEARCH = 12
 
 
 def fetch_details(ids: List[int], timeout: float = 15.0) -> Dict[int, dict]:
@@ -32,4 +37,31 @@ def fetch_details(ids: List[int], timeout: float = 15.0) -> Dict[int, dict]:
                 out[int(item.get("publishedfileid"))] = item
             except (TypeError, ValueError):
                 continue
+    return out
+
+
+def search(key: str, app_id: int, text: str, count: int = 8, timeout: float = 15.0) -> List[dict]:
+    params = {
+        "key": key, "appid": str(app_id), "search_text": text, "numperpage": str(count),
+        "query_type": str(RANKED_BY_TEXT_SEARCH), "return_details": "true",
+        "return_short_description": "true", "return_previews": "true", "page": "1",
+    }
+    req = urllib.request.Request(QUERY_URL + "?" + urllib.parse.urlencode(params),
+                                 headers={"User-Agent": "DeckHaul"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.load(resp)
+    out = []
+    for item in data.get("response", {}).get("publishedfiledetails", []) or []:
+        try:
+            wid = int(item.get("publishedfileid"))
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "id": wid,
+            "title": item.get("title") or "",
+            "description": (item.get("short_description") or item.get("file_description") or "")[:300],
+            "updated": int(item.get("time_updated") or 0),
+            "subscriptions": int(item.get("subscriptions") or 0),
+            "preview": item.get("preview_url") or "",
+        })
     return out

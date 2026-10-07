@@ -334,6 +334,115 @@ class RestorePoints(_FakeDeck):
         self.assertFalse(os.path.exists(dst))
 
 
+class ModUpdates(_FakeDeck):
+    def _with_local_copy_of_workshop_mod(self, app):
+        """A local copy of the Workshop 'Realistic Graphics', enabled instead of it."""
+        from fixture import make_zip, manifest
+        make_zip(os.path.join(app.layout.active.mod_dir, "realistic_gfx_local.scs"), {
+            "manifest.sii": manifest("Realistic Graphics", "2.5", cats=("graphics",), compat=("1.53.*",)),
+            "def/climate/default/weather.sii": "local",
+        })
+        app.refresh()
+        keys = [e.key for e in app.profile.active]
+        ws = "mod_workshop_package.00000000499602D2"
+        keys[keys.index(ws)] = "realistic_gfx_local"
+        app.apply(keys)
+        return ws
+
+    def test_switch_to_workshop(self):
+        app = self.App()
+        app.refresh()
+        ws = self._with_local_copy_of_workshop_mod(app)
+        issue = [i for i in app.issues if i.code == "local_has_workshop"][0]
+        self.assertEqual(issue.extra, {"local": "realistic_gfx_local", "workshop": ws})
+        pos = [e.key for e in app.profile.active].index("realistic_gfx_local")
+        r = app.switch_to_workshop("realistic_gfx_local", ws)
+        keys = [e.key for e in app.profile.active]
+        self.assertEqual(keys[pos], ws)
+        self.assertNotIn("realistic_gfx_local", keys)
+        self.assertFalse(os.path.exists(os.path.join(app.layout.active.mod_dir, "realistic_gfx_local.scs")))
+        app.rollback(r["point"])
+        self.assertIn("realistic_gfx_local", [e.key for e in app.profile.active])
+
+    def test_find_in_workshop(self):
+        from deckhaul import workshop_online
+        app = self.App()
+        app.refresh()
+        with self.assertRaises(Exception):
+            app.find_in_workshop("real_sounds")                     # no key yet
+        with self.assertRaises(Exception):
+            app.set_steam_key("not-a-key")
+        app.set_steam_key("0123456789abcdef0123456789ABCDEF")
+        seen = {}
+
+        def fake_search(key, app_id, text, count=8, timeout=15.0):
+            seen.update(key=key, app_id=app_id, text=text)
+            return [
+                {"id": 1, "title": "Truck Lights Pack", "description": "", "updated": 1, "subscriptions": 900, "preview": ""},
+                {"id": 2, "title": "Real Sounds v5.1 by Tester", "description": "", "updated": 2, "subscriptions": 10, "preview": ""},
+                {"id": 1234567890, "title": "Real Sounds", "description": "", "updated": 3, "subscriptions": 5, "preview": ""},
+            ]
+        orig = workshop_online.search
+        workshop_online.search = fake_search
+        try:
+            r = app.find_in_workshop("real_sounds")
+        finally:
+            workshop_online.search = orig
+        self.assertEqual(seen["text"], "Real Sounds")
+        self.assertEqual(seen["app_id"], 227300)
+        self.assertEqual([f["id"] for f in r["results"]][:2], [1234567890, 2])   # exact title first
+        self.assertTrue(r["results"][0]["installed"])                           # already subscribed
+        self.assertEqual(r["results"][-1]["score"], 0.0)
+
+    def test_sources_survive_update(self):
+        app = self.App()
+        app.refresh()
+        with self.assertRaises(Exception):
+            app.set_mod_source("real_sounds", "ftp://x")
+        app.set_mod_source("real_sounds", "https://example.com/real-sounds")
+        m = {d["key"]: d for d in app.snapshot()["mods"]}
+        self.assertEqual(m["real_sounds"]["source_url"], "https://example.com/real-sounds")
+        dl = os.path.join(self.home, "Downloads")
+        old = time.time() - 600
+        for n in os.listdir(dl):
+            os.utime(os.path.join(dl, n), (old, old))
+        d = app.downloads()
+        while d["pending"]:
+            d = app.downloads()
+        c = {c["name"]: c for c in d["items"]}["real_sounds_5.1.zip"]
+        app.install_download(c["id"], [0], True, True, True)
+        m = {d["key"]: d for d in app.snapshot()["mods"]}
+        self.assertEqual(m["real_sounds_5.1"]["source_url"], "https://example.com/real-sounds")
+
+    def test_needs_update_and_daily_check(self):
+        from deckhaul import workshop_online
+        app = self.App()
+        app.refresh()
+        m = {d["key"]: d for d in app.snapshot()["mods"]}
+        self.assertTrue(m["old_trailer"]["needs_update"])
+        self.assertFalse(m["scania_super"]["needs_update"])
+        calls = []
+
+        def fake_details(ids, timeout=15.0):
+            calls.append(ids)
+            return {1234567890: {"result": 1, "time_updated": 10 ** 10, "title": "Realistic Graphics"}}
+        orig = workshop_online.fetch_details
+        workshop_online.fetch_details = fake_details
+        try:
+            self.assertTrue(app.workshop_auto()["ran"])
+            self.assertFalse(app.workshop_auto()["ran"])            # once a day
+            self.assertEqual(len(calls), 1)
+            self.assertIn("workshop_outdated", {i.code for i in app.issues})
+            again = self.App()                                      # result survives a restart
+            again.refresh()
+            self.assertIn("workshop_outdated", {i.code for i in again.issues})
+            app.set_auto_workshop_check(False)
+            app.online_checked = 0
+            self.assertFalse(app.workshop_auto()["ran"])
+        finally:
+            workshop_online.fetch_details = orig
+
+
 class Downloads(_FakeDeck):
     def setUp(self):
         super().setUp()

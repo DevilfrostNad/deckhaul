@@ -94,14 +94,31 @@ class Candidate:
     mtime: float
     status: str = "ready"          # ready | error | needs_tool | incomplete
     error: str = ""
+    source: str = ""               # page the browser downloaded it from
     payloads: List[Payload] = field(default_factory=list)
 
     def public(self) -> dict:
         return {
             "id": self.id, "name": self.name, "size": self.size, "mtime": self.mtime,
-            "status": self.status, "error": self.error,
+            "status": self.status, "error": self.error, "source": self.source,
             "payloads": [p.public() for p in self.payloads],
         }
+
+
+def download_source(path: str) -> str:
+    """Page the file was downloaded from. Chromium and Firefox on Linux store it
+    in extended attributes; other systems simply return ''."""
+    getx = getattr(os, "getxattr", None)
+    if getx is None:
+        return ""
+    for attr in ("user.xdg.referrer.url", "user.xdg.origin.url"):
+        try:
+            url = getx(path, attr).decode("utf-8", "replace").strip()
+        except OSError:
+            continue
+        if url.startswith(("http://", "https://")):
+            return url
+    return ""
 
 
 def fingerprint(path: str, size: int, mtime: float) -> str:
@@ -261,6 +278,7 @@ def analyze(path: str, staging_root: str) -> Candidate:
     st = os.stat(path)
     name = os.path.basename(path)
     cand = Candidate(fingerprint(path, st.st_size, st.st_mtime), path, name, st.st_size, st.st_mtime)
+    cand.source = download_source(path)
     stem, ext = os.path.splitext(name)
     ext = ext.lower()
     staging = os.path.join(staging_root, cand.id)

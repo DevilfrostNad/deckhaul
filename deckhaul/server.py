@@ -76,6 +76,8 @@ def _make_handler(app: App, port: int, state: dict):
             if url.path == "/api/browse":
                 path = parse_qs(url.query).get("path", [""])[0]
                 return self._safe(lambda b: app.browse(path or None), {})
+            if url.path == "/api/workshop/auto":
+                return self._safe(lambda b: app.workshop_auto(), {})
             if url.path == "/api/update":
                 return self._safe(lambda b: app.update_status(), {})
             if url.path == "/api/conflicts":
@@ -123,7 +125,13 @@ def _make_handler(app: App, port: int, state: dict):
                 "/api/points/delete": lambda b: (app.delete_point(b["id"]), {"points": app.list_points()})[1],
                 "/api/points/ack": lambda b: (app.ack_point_errors(b["id"]), app.snapshot())[1],
                 "/api/restore": lambda b: (app.restore(b["name"]), app.snapshot())[1],
-                "/api/online": lambda b: {"checked": app.online_check(), "state": app.snapshot()},
+                "/api/online": lambda b: {"checked": app.online_check(), "state": app.snapshot(),
+                                          "workshop": app.workshop_status()},
+                "/api/workshop/auto-set": lambda b: (app.set_auto_workshop_check(bool(b.get("on"))), app.workshop_status())[1],
+                "/api/workshop/find": lambda b: app.find_in_workshop(b["key"]),
+                "/api/workshop/switch": lambda b: (app.switch_to_workshop(b["local"], b["workshop"]), app.snapshot())[1],
+                "/api/steam-key": lambda b: (app.set_steam_key(b.get("key")), app.workshop_status())[1],
+                "/api/source": lambda b: (app.set_mod_source(b["key"], b.get("url")), app.snapshot())[1],
                 "/api/downloads/install": lambda b: app.install_download(
                     b["id"], b["payloads"], bool(b.get("enable", True)), bool(b.get("remove_old", True)),
                     bool(b.get("delete_download", True))),

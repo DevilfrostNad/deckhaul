@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 import time
@@ -51,6 +52,15 @@ class App:
         self.download_cache: Dict[str, installer.Candidate] = {}
         self.updater = updater.Updater(self.state_dir)
         self.points = restore.RestoreStore(self.state_dir)
+        self.online_path = os.path.join(self.state_dir, "workshop_online.json")
+        self.online_checked = 0.0
+        try:
+            with open(self.online_path, encoding="utf-8") as fh:
+                cached = json.load(fh)
+            self.online = {int(k): v for k, v in cached.get("details", {}).items()}
+            self.online_checked = cached.get("checked", 0.0)
+        except (OSError, ValueError):
+            pass
 
     # ---------------------------------------------------------------- settings
     def _load_settings(self) -> dict:
@@ -101,6 +111,7 @@ class App:
             self.profile = next((p for p in self.profiles if p.id == want), None) or (
                 self.profiles[0] if self.profiles else None
             )
+            self._apply_online_titles()
             self.new_events = self.history.update(self.mods, self.full_version or self.game_version)
             self._recheck()
             self.scanned_at = time.time()
@@ -114,6 +125,11 @@ class App:
             self.log, self.rules, self.overrides, self.workshop_state, self.compat_status,
         )
         issues += self._online_issues(active)
+        for i in issues:
+            if i.code == "incompatible" and i.mod in self.by_key:
+                m = self.by_key[i.mod]
+                i.extra["source"] = self.source_of(m) if m.source == "local" else ""
+                i.extra["workshop_id"] = m.workshop_id
         if current:
             issues += self._after_change_issue()
         if current:
@@ -478,6 +494,7 @@ class App:
                 restore.RestoreStore.record(point, [], summary=f"Неудачная установка из «{cand.name}»")
                 raise UserError(str(exc))
             restore.RestoreStore.record(point, res["journal"], summary=self._install_summary(cand, payload_ids, res))
+            self._remember_sources(cand, payload_ids, res)
             names = ", ".join(res["installed"])
             self.history.note("installed", f"Установлено из «{cand.name}»: {names}", point=point.id)
             self.download_cache.pop(fp, None)
@@ -508,6 +525,23 @@ class App:
                         note = f"Профиль «{prof.name}» обновлён. Вернуть всё как было можно на вкладке «Точки восстановления»."
             return {"installed": res["installed"], "replaced": res["replaced"],
                     "trashed": len(res["trashed"]), "note": note, "point": point.id}
+
+    def _remember_sources(self, cand, payload_ids, res) -> None:
+        """Keep the "where to update" link: from the browser's download record,
+        or carried over from the version this install replaces."""
+        old_by_new = {r["new"]: r["old"] for r in res["replaced"]}
+        for p in cand.payloads:
+            if p.id not in payload_ids:
+                continue
+            key = os.path.splitext(p.target)[0]
+            url = cand.source
+            old = old_by_new.get(key)
+            if not url and old and old in self._sources:
+                url = self._sources[old].get("url", "")
+            if url:
+                m = p.mod or {}
+                self._sources[key] = {"url": url, "name": m.get("name", ""), "author": m.get("author", "")}
+        self._save_settings()
 
     def _install_summary(self, cand, payload_ids, res) -> str:
         parts = []
@@ -624,6 +658,8 @@ class App:
             self.refresh()
 
     # ----------------------------------------------------------------- online
+    WORKSHOP_CHECK_EVERY = 24 * 3600
+
     def online_check(self) -> int:
         from .workshop_online import fetch_details
 
@@ -636,12 +672,143 @@ class App:
             raise UserError(f"Нет связи со Steam: {exc}")
         with self.lock:
             self.online = details
-            for m in self.mods:
-                info = details.get(m.workshop_id) if m.workshop_id else None
-                if info and info.get("title") and m.name.startswith("Workshop "):
-                    m.name = info["title"]
+            self.online_checked = time.time()
+            try:
+                with open(self.online_path, "w", encoding="utf-8") as fh:
+                    json.dump({"checked": self.online_checked, "details": details}, fh, ensure_ascii=False)
+            except OSError:
+                pass
+            self._apply_online_titles()
             self._recheck()
         return len(details)
+
+    def _apply_online_titles(self) -> None:
+        for m in self.mods:
+            info = self.online.get(m.workshop_id) if m.workshop_id else None
+            if info and info.get("title") and m.name.startswith("Workshop "):
+                m.name = info["title"]
+
+    def workshop_status(self) -> dict:
+        return {
+            "auto": self.settings.get("auto_workshop_check", True),
+            "checked": self.online_checked,
+            "has_key": bool(self.settings.get("steam_api_key")),
+            "count": sum(1 for m in self.mods if m.workshop_id is not None),
+        }
+
+    def workshop_auto(self) -> dict:
+        """Run the daily Workshop check if it is due. Network errors stay quiet."""
+        st = self.workshop_status()
+        ran = False
+        if st["auto"] and st["count"] and time.time() - self.online_checked > self.WORKSHOP_CHECK_EVERY:
+            try:
+                self.online_check()
+                ran = True
+            except UserError:
+                pass
+        st = self.workshop_status()
+        st["ran"] = ran
+        return st
+
+    def set_auto_workshop_check(self, on: bool) -> None:
+        self.settings["auto_workshop_check"] = bool(on)
+        self._save_settings()
+
+    # ------------------------------------------------- where mods get updates
+    def set_steam_key(self, key: Optional[str]) -> None:
+        key = (key or "").strip()
+        if key and not re.fullmatch(r"[0-9A-Fa-f]{32}", key):
+            raise UserError("Ключ Steam Web API — это 32 символа из цифр и букв A–F.")
+        if key:
+            self.settings["steam_api_key"] = key.upper()
+        else:
+            self.settings.pop("steam_api_key", None)
+        self._save_settings()
+
+    @staticmethod
+    def _words(text: str) -> set:
+        text = re.sub(r"\bv?\d+([._]\d+)*\b", " ", (text or "").lower())
+        stop = {"ets2", "ets", "mod", "by", "for", "the", "and", "euro", "truck", "simulator", "2", "of"}
+        return {w for w in re.findall(r"[\w]+", text) if len(w) > 1 and w not in stop}
+
+    def find_in_workshop(self, key: str) -> dict:
+        from .workshop_online import search
+
+        m = self.by_key.get(key)
+        if m is None:
+            raise UserError("Мод не найден")
+        api_key = self.settings.get("steam_api_key")
+        if not api_key:
+            raise UserError("Нужен ключ Steam Web API")
+        query = re.sub(r"\bv?\d+([._]\d+)+\b", "", m.name).strip() or m.name
+        try:
+            found = search(api_key, self.layout.game.app_id, query)
+        except OSError as exc:
+            if "403" in str(exc) or "401" in str(exc):
+                raise UserError("Steam не принял ключ. Проверьте его на steamcommunity.com/dev/apikey.")
+            raise UserError(f"Нет связи со Steam: {exc}")
+        mine = self._words(m.name)
+        have = {x.workshop_id for x in self.mods if x.workshop_id is not None}
+        for f in found:
+            theirs = self._words(f["title"])
+            f["score"] = round(len(mine & theirs) / len(mine | theirs), 2) if mine | theirs else 0.0
+            f["installed"] = f["id"] in have
+            f["url"] = f"https://steamcommunity.com/sharedfiles/filedetails/?id={f['id']}"
+            f["steam_url"] = f"steam://url/CommunityFilePage/{f['id']}"
+        found.sort(key=lambda f: (-f["score"], -f["subscriptions"]))
+        return {"mod": m.name, "query": query, "results": found}
+
+    @property
+    def _sources(self) -> Dict[str, dict]:
+        return self.settings.setdefault("mod_sources", {})
+
+    def source_of(self, m: Mod) -> str:
+        rec = self._sources.get(m.key)
+        if rec:
+            return rec.get("url", "")
+        name, author = (m.name or "").lower(), (m.author or "").lower()
+        for rec in self._sources.values():
+            if name and rec.get("name", "").lower() == name and rec.get("author", "").lower() == author:
+                return rec.get("url", "")
+        return ""
+
+    def set_mod_source(self, key: str, url: Optional[str]) -> None:
+        with self.lock:
+            m = self.by_key.get(key)
+            if m is None:
+                raise UserError("Мод не найден")
+            url = (url or "").strip()
+            if url and not re.match(r"https?://[^\s]+$", url):
+                raise UserError("Ссылка должна начинаться с http:// или https://")
+            if url:
+                self._sources[key] = {"url": url, "name": m.name, "author": m.author}
+            else:
+                self._sources.pop(key, None)
+            self._save_settings()
+
+    def switch_to_workshop(self, local_key: str, ws_key: str) -> dict:
+        """Use the Workshop copy instead of a local file, keeping its place in the order."""
+        with self.lock:
+            prof = self._require_profile()
+            if paths.game_running(self.layout.game):
+                raise UserError("Игра запущена. Закройте её перед переключением.")
+            loc, ws = self.by_key.get(local_key), self.by_key.get(ws_key)
+            if not loc or not ws or loc.source != "local" or ws.source != "workshop":
+                raise UserError("Не найдены обе копии мода")
+            keys = [e.key for e in prof.active]
+            if local_key in keys:
+                if ws_key in keys:
+                    keys.remove(local_key)
+                else:
+                    keys[keys.index(local_key)] = ws_key
+            point = self._point("switch", f"«{loc.name}»: копия из Workshop вместо локальной {loc.version or ''}".strip())
+            dst = self.points.move_to_trash(loc.path)
+            restore.RestoreStore.record(point, [{"op": "moved", "src": loc.path, "dst": dst}])
+            self.refresh()
+            profiles.write_order(self.state_dir, self.profile, self._entries(keys), backup=False)
+            self.history.note("switch", f"«{loc.name}» теперь из Workshop", point=point.id)
+            self.refresh()
+            return {"point": point.id}
 
     # ------------------------------------------------------------------ files
     def icon(self, key: str):
@@ -730,6 +897,8 @@ class App:
                 d["override"] = self.overrides.get(m.key)
                 d["compat"] = m.compatible_with(self.game_version, self.full_version)
                 d["compat_ok"], d["compat_ok_before"] = self.compat_status(m)
+                d["source_url"] = self.source_of(m) if m.source == "local" else ""
+                d["needs_update"] = d["compat"] is False and not d["compat_ok"]
                 mods.append(d)
             for k in active_keys:
                 if k not in self.by_key:

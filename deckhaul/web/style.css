@@ -284,6 +284,22 @@ h2:first-child { margin-top: 0; }
   .pt-btns { justify-content: flex-start; }
 }
 
+/* ---------- workshop & sources */
+.linkish { background: none; border: 0; padding: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.linkish:hover { text-decoration: underline; }
+a { color: var(--accent); }
+.src-form { margin-top: 12px; }
+.src-form label { display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-s); color: var(--muted); }
+.steps { padding-left: 20px; }
+.steps li { margin-bottom: 6px; }
+.ws-list { list-style: none; margin: 0; padding: 0; max-height: 56vh; overflow: auto; }
+.ws-item {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  padding: 10px 0; border-top: 1px solid var(--line);
+}
+.ws-item img, .ws-item .thumb { width: 96px; height: 54px; object-fit: cover; border-radius: 4px; background: var(--surface-2); }
+@media (max-width: 900px) { .ws-item { grid-template-columns: 1fr; } }
+
 /* ---------- update */
 .update { max-width: 900px; }
 .update .notes {
