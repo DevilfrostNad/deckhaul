@@ -114,7 +114,7 @@ tests/         тесты и генератор тестовой «копии» 
 python3 -m unittest discover -s tests
 ```
 
-При первом запуске тесты скачивают три образца архивов HashFS v2 из [TruckLib.HashFs](https://github.com/sk-zk/TruckLib.HashFs) (лицензия GPL-2.0) в `tests/data`. В репозиторий они не входят. Без сети этот тест пропускается.
+При первом запуске тесты скачивают образец архива HashFS v2 из [TruckLib.HashFs](https://github.com/sk-zk/TruckLib.HashFs) (лицензия GPL-2.0) в `tests/data`. В репозиторий он не входит. Без сети этот тест пропускается.
 
 ## Ограничения
 
