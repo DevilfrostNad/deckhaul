@@ -32,6 +32,22 @@ curl -fsSL https://raw.githubusercontent.com/DevilfrostNad/deckhaul/main/get.sh 
 
 Удалить: папки `~/.local/share/deckhaul-app`, `~/.local/share/deckhaul` и файлы `~/.local/bin/deckhaul`, `~/.local/share/applications/deckhaul.desktop`.
 
+### Если DeckHaul не открывается
+
+DeckHaul показывает интерфейс в браузере. На новом Steam Deck браузера нет, поэтому DeckHaul открывается во встроенном браузере Steam. Удобнее и надёжнее поставить в Discover Google Chrome или Firefox: тогда DeckHaul откроется отдельным окном, а в игровом режиме — на весь экран.
+
+Если окно так и не появилось, выполните в Konsole:
+
+```bash
+~/.local/bin/deckhaul
+```
+
+```bash
+cat ~/.local/share/deckhaul/launcher.log ~/.local/share/deckhaul/server.log
+```
+
+Первая команда покажет ошибку, если она есть, вторая — что DeckHaul пытался сделать. С этим текстом проще всего разобраться в обсуждениях на GitHub.
+
 ## Обновление
 
 Раз в день DeckHaul проверяет на GitHub, не вышла ли новая версия. Когда она выходит, программа сообщает об этом, а на вкладке «Изменения» появляется список нового и кнопка «Обновить DeckHaul». После обновления DeckHaul перезапускается сам, страница перезагружается.

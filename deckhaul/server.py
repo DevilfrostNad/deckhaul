@@ -110,7 +110,7 @@ def _make_handler(app: App, port: int, state: dict):
             except ValueError:
                 return self._json({"error": "Неверный запрос"}, 400)
             routes = {
-                "/api/refresh": lambda b: (app.refresh(), app.snapshot())[1],
+                "/api/refresh": lambda b: (app.refresh_in_background(), app.snapshot())[1],
                 "/api/profile": lambda b: (app.select_profile(b["id"]), app.snapshot())[1],
                 "/api/preview": lambda b: {"issues": [i.to_dict() for i in app.preview(b["order"])]},
                 "/api/autosort": self._autosort,

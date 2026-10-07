@@ -91,6 +91,21 @@ function setState(snap, keepOrder = false) {
   preview = S.issues;
   renderAll();
   if (keepOrder && isDirty()) schedulePreview();
+  watchScan();
+}
+
+// While the server scans mods in the background, poll and show progress.
+let scanTimer = null;
+let wasScanning = false;
+function watchScan() {
+  const running = S.scan && S.scan.running;
+  if (wasScanning && !running && !S.scan.error) toast("Проверка модов закончена");
+  wasScanning = running;
+  if (!running || scanTimer) return;
+  scanTimer = setTimeout(async () => {
+    scanTimer = null;
+    try { setState(await api("/api/state"), isDirty()); } catch (e) { watchScan(); }
+  }, 1000);
 }
 
 async function load() {
@@ -138,7 +153,7 @@ function renderTop() {
   const sel = $("profile");
   sel.innerHTML = S.profiles.map((p) =>
     `<option value="${esc(p.id)}" ${S.profile && p.id === S.profile.id ? "selected" : ""}>${esc(p.name)}${p.cloud ? " (Steam Cloud)" : ""}</option>`
-  ).join("") || `<option>Профилей нет</option>`;
+  ).join("") || `<option>${S.scan && S.scan.running ? "Загрузка…" : "Профилей нет"}</option>`;
 
   const lay = S.layout || {};
   const ver = S.game_version_full || S.game_version;
@@ -147,6 +162,13 @@ function renderTop() {
 
   const b = $("banner");
   const notes = [];
+  if (S.scan && S.scan.running) {
+    const sc = S.scan;
+    notes.push(sc.total
+      ? `Проверяю моды: ${sc.done} из ${sc.total}${sc.current ? " · " + sc.current : ""}. Первая проверка больших модов может занять несколько минут, следующие проходят за секунды.`
+      : "Ищу игру и моды…");
+  }
+  if (S.scan && S.scan.error) notes.push("Проверка модов прервалась с ошибкой: " + S.scan.error + ". Нажмите «Обновить», чтобы попробовать ещё раз.");
   if (S.game_running) notes.push("Игра запущена. Сохранять порядок можно только после выхода из неё: при закрытии игра перезапишет профиль.");
   if (S.profile && S.profile.note) notes.push(S.profile.note);
   if (S.profile && S.profile.cloud) notes.push("Профиль хранится в Steam Cloud. После сохранения дождитесь синхронизации, прежде чем играть на другом устройстве.");
@@ -197,6 +219,10 @@ function renderIssues() {
     <div><b>${s.warning}</b>${plural(s.warning, "предупреждение", "предупреждения", "предупреждений").replace(/^\d+ /, "")}</div>
     <div><b>${s.info}</b>${plural(s.info, "заметка", "заметки", "заметок").replace(/^\d+ /, "")}</div>
   </div>`;
+  if (!S.layout && S.scan && S.scan.running) {
+    el.innerHTML = `<div class="empty"><b class="neutral">Идёт первая проверка</b>Ищу папки игры, профили и моды. Ход проверки — в строке сверху.</div>`;
+    return;
+  }
   if (!S.issues.length) {
     el.innerHTML = head + `<div class="empty"><b>Всё в порядке</b>Моды установлены правильно, порядок соответствует правилам.</div>`;
     return;
@@ -582,9 +608,8 @@ $("mods-filter").addEventListener("change", renderMods);
 $("autosort").addEventListener("click", autosort);
 $("apply").addEventListener("click", apply);
 $("revert").addEventListener("click", () => { order = saved.slice(); picked = null; preview = S.issues; changed(); });
-$("refresh").addEventListener("click", () => run("Проверяю моды", async () => {
-  setState(await api("/api/refresh", {}), true);
-  toast("Проверка закончена");
+$("refresh").addEventListener("click", () => run("Запускаю проверку", async () => {
+  setState(await api("/api/refresh", {}), isDirty());
 }));
 $("profile").addEventListener("change", (e) => {
   if (isDirty() && !confirm("Несохранённый порядок будет потерян. Переключить профиль?")) {

@@ -59,14 +59,16 @@ def main(argv=None) -> int:
 
     app = App(a.game, a.data_dir)
     try:
+        if a.command == "serve":
+            # Open the window right away; the first scan of big mods can take minutes.
+            from .server import serve
+            app.refresh_in_background()
+            serve(app, port=a.port, open_browser=not a.no_browser, idle_exit=a.idle_exit)
+            return 0
+
         app.refresh()
         if a.profile:
             app.select_profile(a.profile)
-
-        if a.command == "serve":
-            from .server import serve
-            serve(app, port=a.port, open_browser=not a.no_browser, idle_exit=a.idle_exit)
-            return 0
 
         if a.command == "profiles":
             for p in app.profiles:

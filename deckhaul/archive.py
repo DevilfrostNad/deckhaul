@@ -45,6 +45,21 @@ class Container:
     def root_names(self) -> List[str]:
         raise NotImplementedError
 
+    def content_hashes(self, root_meta=()):
+        """(hashes of files below the archive root, whether the paths are known).
+        Root-level files (manifest, icon, description) never conflict, so they are left out."""
+        out, known = [], True
+        root = {hash_path(n) for n in root_meta}
+        for h, p in self.file_hashes().items():
+            if p is None:
+                known = False
+                if h in root:
+                    continue
+            elif "/" not in p:
+                continue
+            out.append(h)
+        return out, known
+
     def close(self) -> None:
         pass
 
@@ -369,6 +384,20 @@ class HashFsContainer(Container):
             return []
         dirs, files = listing
         return dirs + files
+
+    def content_hashes(self, root_meta=()):
+        # The entry table already holds the path hashes; hashing every path
+        # again in Python would take minutes on a big map mod.
+        files = {h for h, e in self.entries.items() if not e.is_dir}
+        root_files = set(root_meta)
+        try:
+            listing = self._listing("")
+        except (ArchiveError, zlib.error, struct.error):
+            listing = None
+        if listing is not None:
+            root_files.update(listing[1])
+        files -= {self._hash(n) for n in root_files}
+        return sorted(files), listing is not None
 
     def has_listing(self) -> bool:
         return self._hash("") in self.entries

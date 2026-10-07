@@ -26,6 +26,8 @@ class UserError(Exception):
 class App:
     def __init__(self, game: str = "ets2", data_dir: Optional[str] = None, state_dir: Optional[str] = None):
         self.lock = threading.RLock()
+        self.scan_lock = threading.Lock()
+        self.scan_state = {"running": False, "done": 0, "total": 0, "current": "", "error": ""}
         self.state_dir = state_dir or paths.state_dir()
         os.makedirs(self.state_dir, exist_ok=True)
         self.settings_path = os.path.join(self.state_dir, "settings.json")
@@ -94,27 +96,62 @@ class App:
 
     # ------------------------------------------------------------------- scan
     def refresh(self) -> None:
+        """Rescan everything now (used by the CLI and after changes)."""
         with self.lock:
-            self.layout = paths.discover(self.game, self.data_dir_override)
-            act = self.layout.active
-            self.log = read_game_log(act.path) if act else None
-            res = scan(
-                act.mod_dir if act else "", self.layout.workshop_dirs, self.cache,
-                self.game_version, self.full_version, self.layout.workshop_acf,
-            )
-            self.mods, self.junk, self.workshop_state = res.mods, res.junk_files, res.workshop_state
-            self.by_key = {}
-            for m in self.mods:
-                self.by_key.setdefault(m.key, m)
-            self.profiles = profiles.list_profiles(act.path) if act else []
-            want = self.settings.get("profile")
-            self.profile = next((p for p in self.profiles if p.id == want), None) or (
-                self.profiles[0] if self.profiles else None
-            )
-            self._apply_online_titles()
-            self.new_events = self.history.update(self.mods, self.full_version or self.game_version)
-            self._recheck()
-            self.scanned_at = time.time()
+            self._assign(self._collect(None))
+
+    def refresh_in_background(self) -> bool:
+        """Start a scan in a thread; the UI polls scan_state. False if one is running."""
+        if self.scan_state["running"]:
+            return False
+        self.scan_state.update(running=True, done=0, total=0, current="", error="")
+        threading.Thread(target=self._background_refresh, daemon=True).start()
+        return True
+
+    def _background_refresh(self) -> None:
+        try:
+            with self.scan_lock:
+                data = self._collect(self._progress)
+            with self.lock:
+                self._assign(data)
+        except Exception as exc:  # shown in the UI instead of a silent dead page
+            import traceback
+            traceback.print_exc()
+            self.scan_state["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            self.scan_state["running"] = False
+
+    def _progress(self, done: int, total: int, name: str) -> None:
+        self.scan_state.update(done=done, total=total, current=name)
+
+    def _collect(self, progress) -> dict:
+        """The slow part of a refresh. Touches no shared state, so it can run unlocked."""
+        layout = paths.discover(self.game, self.data_dir_override)
+        act = layout.active
+        log = read_game_log(act.path) if act else None
+        gv = self.settings.get("game_version") or (log.short_version if log else None)
+        full = log.version if log else None
+        res = scan(act.mod_dir if act else "", layout.workshop_dirs, self.cache,
+                   gv, full, layout.workshop_acf, progress=progress)
+        profs = profiles.list_profiles(act.path) if act else []
+        return {"layout": layout, "log": log, "res": res, "profiles": profs}
+
+    def _assign(self, data: dict) -> None:
+        self.layout, self.log = data["layout"], data["log"]
+        res = data["res"]
+        self.mods, self.junk, self.workshop_state = res.mods, res.junk_files, res.workshop_state
+        self.by_key = {}
+        for m in self.mods:
+            self.by_key.setdefault(m.key, m)
+        self.profiles = data["profiles"]
+        want = self.settings.get("profile")
+        self.profile = next((p for p in self.profiles if p.id == want), None) or (
+            self.profiles[0] if self.profiles else None
+        )
+        self._apply_online_titles()
+        self.new_events = self.history.update(self.mods, self.full_version or self.game_version)
+        self._recheck()
+        self.scanned_at = time.time()
 
     def _recheck(self, active: Optional[List[ActiveEntry]] = None) -> List[checks.Issue]:
         current = active is None
@@ -907,6 +944,7 @@ class App:
                                  "group": "top"})
             return {
                 "app": {"version": __version__, "scanned_at": self.scanned_at},
+                "scan": dict(self.scan_state),
                 "layout": self.layout.to_dict() if self.layout else None,
                 "game_version": self.game_version,
                 "game_version_full": self.full_version,

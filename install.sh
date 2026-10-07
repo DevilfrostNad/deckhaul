@@ -39,32 +39,87 @@ BOOT='import sys; sys.path.insert(0, sys.argv.pop(1)); from deckhaul.__main__ im
 if [ "$#" -gt 0 ]; then
   exec python3 -c "$BOOT" "$APP" "$@"
 fi
+
+# Started from the menu or from Steam there is no terminal: keep a log.
+LOG="$STATE/launcher.log"
+if [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 200000 ]; then mv -f "$LOG" "$LOG.old"; fi
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%F %T') запуск DeckHaul"
+
+game_mode() {
+  [ -n "${GAMESCOPE_WAYLAND_DISPLAY:-}" ] || [ "${XDG_CURRENT_DESKTOP:-}" = "gamescope" ] ||
+    [ "${SteamGamepadUI:-}" = "1" ]
+}
+
+show_error() {
+  echo "ОШИБКА: $1"
+  if command -v kdialog >/dev/null; then kdialog --title DeckHaul --error "$1" && return; fi
+  if command -v zenity >/dev/null; then zenity --error --title=DeckHaul --text="$1" && return; fi
+  if command -v notify-send >/dev/null; then notify-send DeckHaul "$1"; fi
+}
+
+alive() { curl -fs --max-time 2 "${1}api/ping" >/dev/null 2>&1; }
+
 URL=""
-if [ -f "$STATE/url" ] && curl -fs "$(cat "$STATE/url")api/ping" >/dev/null 2>&1; then
+if [ -f "$STATE/url" ] && alive "$(cat "$STATE/url")"; then
   URL="$(cat "$STATE/url")"
+  echo "сервер уже запущен: $URL"
 else
   rm -f "$STATE/url"
   nohup python3 -c "$BOOT" "$APP" serve --no-browser --idle-exit 900 >"$STATE/server.log" 2>&1 &
-  for _ in $(seq 1 50); do
+  PID=$!
+  for _ in $(seq 1 150); do
     [ -f "$STATE/url" ] && break
+    kill -0 "$PID" 2>/dev/null || break
     sleep 0.2
   done
   URL="$(cat "$STATE/url" 2>/dev/null || true)"
 fi
 if [ -z "$URL" ]; then
-  echo "DeckHaul не запустился, подробности в $STATE/server.log" >&2
+  show_error "DeckHaul не запустился.
+
+$(tail -n 6 "$STATE/server.log" 2>/dev/null)
+
+Полный журнал: $STATE/server.log"
   exit 1
 fi
-# Отдельное окно без адресной строки, если есть браузер на Chromium.
+echo "адрес: $URL, игровой режим: $(game_mode && echo да || echo нет)"
+
+# 1. A browser from Discover (Flatpak). Chromium-based ones open as an app window.
 for id in com.google.Chrome org.chromium.Chromium com.microsoft.Edge com.brave.Browser; do
   if flatpak info "$id" >/dev/null 2>&1; then
+    echo "открываю в $id"
+    if game_mode; then
+      exec flatpak run "$id" --kiosk --start-fullscreen "$URL"
+    fi
     exec flatpak run "$id" --app="$URL" --window-size=1280,800
   fi
 done
 if flatpak info org.mozilla.firefox >/dev/null 2>&1; then
+  echo "открываю в Firefox"
+  if game_mode; then exec flatpak run org.mozilla.firefox --kiosk "$URL"; fi
   exec flatpak run org.mozilla.firefox --new-window "$URL"
 fi
-exec xdg-open "$URL"
+
+# 2. A browser installed into the system.
+for b in google-chrome-stable chromium firefox; do
+  if command -v "$b" >/dev/null; then
+    echo "открываю в $b"
+    exec "$b" "$URL"
+  fi
+done
+
+# 3. No browser at all (a fresh Steam Deck): use the one built into Steam.
+#    Stay alive while DeckHaul runs, otherwise game mode closes the overlay.
+if command -v steam >/dev/null; then
+  echo "браузера нет, открываю во встроенном браузере Steam"
+  steam "steam://openurl/$URL" >/dev/null 2>&1 &
+  while alive "$URL"; do sleep 5; done
+  exit 0
+fi
+
+echo "открываю через xdg-open"
+xdg-open "$URL" || show_error "Не нашёл, чем открыть DeckHaul. Установите Firefox или Google Chrome в Discover и запустите DeckHaul снова. Адрес программы: $URL"
 LAUNCH
 chmod +x "$BIN/deckhaul"
 

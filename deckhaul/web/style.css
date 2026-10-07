@@ -159,6 +159,7 @@ h2:first-child { margin-top: 0; }
 .issue-actions { grid-column: 3; grid-row: 1 / span 3; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .empty { padding: 32px 16px; text-align: center; color: var(--muted); }
 .empty b { display: block; color: var(--ok); font-size: var(--fs-l); margin-bottom: 4px; }
+.empty b.neutral { color: var(--text); }
 
 /* ---------- order */
 .order-layout { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 16px; }

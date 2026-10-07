@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import zlib
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -33,6 +34,7 @@ KNOWN_ROOT_DIRS = {
 ROOT_META = ("manifest.sii", "versions.sii", "description.txt", "mod_description.txt")
 
 CACHE_VERSION = 3
+CRC_CHECK_LIMIT = 64 << 20
 
 
 @dataclass
@@ -116,9 +118,9 @@ class ScanCache:
     def save(self) -> None:
         if not self.dirty:
             return
-        tmp = self.path + ".tmp"
+        tmp = f"{self.path}.{os.getpid()}.{id(self)}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump({"v": CACHE_VERSION, "items": self.data}, fh)
+            json.dump({"v": CACHE_VERSION, "items": dict(self.data)}, fh)
         os.replace(tmp, self.path)
         self.dirty = False
 
@@ -191,7 +193,8 @@ def inspect(mod: Mod) -> Mod:
                 except ArchiveError:
                     pass
 
-        if isinstance(c, ZipContainer):
+        # A CRC check reads the whole archive; worth it only for small files.
+        if isinstance(c, ZipContainer) and os.path.getsize(mod.path) < CRC_CHECK_LIMIT:
             bad = c.test()
             if bad:
                 mod.scan_problems.append(("broken_archive", f"повреждён файл внутри архива: {bad}"))
@@ -199,25 +202,13 @@ def inspect(mod: Mod) -> Mod:
         root = c.root_names()
         _check_layout(mod, c, root)
 
+        meta = list(ROOT_META) + ([mod.icon] if mod.icon else [])
         try:
-            hashes = c.file_hashes()
-        except (ArchiveError, OSError) as exc:
+            hashes, known = c.content_hashes(meta)
+        except (ArchiveError, OSError, zlib.error) as exc:
             mod.scan_problems.append(("broken_archive", str(exc)))
-            hashes = {}
-        root_hashes = {hash_path(n) for n in ROOT_META}
-        if mod.icon:
-            root_hashes.add(hash_path(mod.icon))
-        keep = []
-        known = True
-        for h, p in hashes.items():
-            if p is None:
-                known = False
-                if h in root_hashes:
-                    continue
-            elif "/" not in p:
-                continue
-            keep.append(h)
-        mod.hashes = sorted(keep)
+            hashes, known = [], True
+        mod.hashes = sorted(hashes)
         mod.paths_known = known
     if not mod.name:
         mod.name = mod.key
@@ -348,37 +339,57 @@ def read_workshop_state(acf_paths: List[str]) -> Dict[int, dict]:
 
 def scan(mod_dir: str, workshop_dirs: List[str], cache: ScanCache,
          game_version: Optional[str], full_version: Optional[str],
-         acf_paths: Optional[List[str]] = None) -> ScanResult:
+         acf_paths: Optional[List[str]] = None, progress=None) -> ScanResult:
+    """progress(done, total, name) is called before each mod is read."""
     mods: List[Mod] = []
     cands, junk = _local_candidates(mod_dir)
-    for key, path in cands:
-        mods.append(_load(Mod(key=key, source="local", path=path, name=key), cache))
-
+    ws_items = []
     for ws_root in workshop_dirs:
-        for wid in sorted(os.listdir(ws_root)):
-            if not wid.isdigit():
-                continue
-            ws_dir = os.path.join(ws_root, wid)
-            if not os.path.isdir(ws_dir):
-                continue
-            key = workshop_key(int(wid))
-            try:
-                slot, payload = _workshop_payload(ws_dir, game_version, full_version)
-            except OSError:
-                slot, payload = None, None
-            if payload is None:
-                m = Mod(key=key, source="workshop", path=ws_dir, name=f"Workshop {wid}",
-                        workshop_id=int(wid), workshop_slot=slot)
-                m.scan_problems.append((
-                    "workshop_empty",
-                    "папка мода из Workshop пуста или в ней нет версии для этой игры. "
-                    "Отпишитесь и подпишитесь заново или проверьте файлы игры в Steam",
-                ))
-                mods.append(m)
-                continue
-            m = Mod(key=key, source="workshop", path=payload, name=f"Workshop {wid}",
+        try:
+            names = sorted(os.listdir(ws_root))
+        except OSError:
+            continue
+        for wid in names:
+            if wid.isdigit() and os.path.isdir(os.path.join(ws_root, wid)):
+                ws_items.append((ws_root, wid))
+    total = len(cands) + len(ws_items)
+    done = 0
+
+    def tick(name):
+        nonlocal done
+        if progress:
+            progress(done, total, name)
+        done += 1
+
+    for key, path in cands:
+        tick(os.path.basename(path))
+        mods.append(_load(Mod(key=key, source="local", path=path, name=key), cache))
+        if done % 20 == 0:
+            cache.save()                 # a long first scan survives being interrupted
+
+    for ws_root, wid in ws_items:
+        tick(f"Workshop {wid}")
+        ws_dir = os.path.join(ws_root, wid)
+        key = workshop_key(int(wid))
+        try:
+            slot, payload = _workshop_payload(ws_dir, game_version, full_version)
+        except OSError:
+            slot, payload = None, None
+        if payload is None:
+            m = Mod(key=key, source="workshop", path=ws_dir, name=f"Workshop {wid}",
                     workshop_id=int(wid), workshop_slot=slot)
-            mods.append(_load(m, cache))
+            m.scan_problems.append((
+                "workshop_empty",
+                "папка мода из Workshop пуста или в ней нет версии для этой игры. "
+                "Отпишитесь и подпишитесь заново или проверьте файлы игры в Steam",
+            ))
+            mods.append(m)
+            continue
+        m = Mod(key=key, source="workshop", path=payload, name=f"Workshop {wid}",
+                workshop_id=int(wid), workshop_slot=slot)
+        mods.append(_load(m, cache))
+    if progress:
+        progress(total, total, "")
     cache.save()
     return ScanResult(mods, junk, read_workshop_state(acf_paths or []))
 
