@@ -22,6 +22,7 @@
 
 <nav class="tabs" role="tablist" aria-label="Разделы">
   <button role="tab" data-tab="issues" aria-selected="true">Проблемы <span class="count" id="c-issues"></span></button>
+  <button role="tab" data-tab="install">Установка <span class="count" id="c-install"></span></button>
   <button role="tab" data-tab="order">Порядок <span class="count" id="c-order"></span></button>
   <button role="tab" data-tab="mods">Все моды <span class="count" id="c-mods"></span></button>
   <button role="tab" data-tab="history">Изменения <span class="count" id="c-history"></span></button>
@@ -30,6 +31,25 @@
 
 <main>
   <section id="tab-issues" class="tab" role="tabpanel"></section>
+
+  <section id="tab-install" class="tab" role="tabpanel" hidden>
+    <div class="install-head">
+      <p class="hint">Скачайте мод браузером как обычно. DeckHaul найдёт его в папке загрузок,
+        проверит, распакует и положит в папку игры.</p>
+      <dl class="paths">
+        <dt>Ищу в</dt><dd><span id="dl-dir"></span> <button id="dl-dir-change" class="btn small">Другая папка</button></dd>
+        <dt>Ставлю в</dt><dd id="dl-target"></dd>
+      </dl>
+      <form id="dl-dir-form" class="dir-form" hidden>
+        <label class="field-label" for="dl-dir-input">Папка загрузок</label>
+        <input id="dl-dir-input" class="search" type="text" spellcheck="false">
+        <button class="btn small primary" type="submit">Сохранить</button>
+        <button class="btn small" type="button" id="dl-dir-reset">По умолчанию</button>
+      </form>
+      <p id="dl-busy" class="hint" hidden></p>
+    </div>
+    <div id="dl-list"></div>
+  </section>
 
   <section id="tab-order" class="tab" role="tabpanel" hidden>
     <div class="order-layout">

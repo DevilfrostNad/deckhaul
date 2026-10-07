@@ -421,6 +421,7 @@ function showTab(name) {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   document.querySelectorAll(".tab").forEach((t) => (t.hidden = t.id !== "tab-" + name));
   if (name === "backups") renderBackups();
+  if (name === "install") loadDownloads(true);
 }
 
 function currentTab() {
@@ -541,7 +542,7 @@ $("backup-now").addEventListener("click", () => run("Делаю копию", asy
 window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 
 // keyboard tab switching (Steam Deck desktop mode maps L1/R1 to keys only in some layouts)
-const TABS = ["issues", "order", "mods", "history", "backups"];
+const TABS = ["issues", "install", "order", "mods", "history", "backups"];
 function cycleTab(d) {
   const i = TABS.indexOf(currentTab());
   showTab(TABS[(i + d + TABS.length) % TABS.length]);
@@ -590,5 +591,144 @@ function padLoop() {
 }
 window.addEventListener("gamepadconnected", () => requestAnimationFrame(padLoop), { once: true });
 
+// ------------------------------------------------------------- downloads
+let DL = null;
+const seenDownloads = new Set();
+let firstDownloadsLoad = true;
+
+function fmtSize(b) {
+  if (b >= 1 << 30) return (b / (1 << 30)).toFixed(1).replace(".", ",") + " ГБ";
+  if (b >= 1 << 20) return (b / (1 << 20)).toFixed(1).replace(".", ",") + " МБ";
+  return Math.max(1, Math.round(b / 1024)) + " КБ";
+}
+
+async function loadDownloads(render) {
+  try {
+    DL = await api("/api/downloads");
+  } catch (e) {
+    if (render) toast(e.message);
+    return;
+  }
+  const ready = DL.items.filter((c) => c.status === "ready");
+  $("c-install").textContent = ready.length ? String(ready.length) : "";
+  const fresh = ready.filter((c) => !seenDownloads.has(c.id));
+  ready.forEach((c) => seenDownloads.add(c.id));
+  if (!firstDownloadsLoad && fresh.length && currentTab() !== "install") {
+    toast(`В загрузках новый мод: ${fresh[0].name}. Откройте вкладку «Установка».`, 6000);
+  }
+  firstDownloadsLoad = false;
+  if (render || currentTab() === "install") renderDownloads();
+}
+
+function payloadHtml(c, p) {
+  const m = p.mod || {};
+  const compat = p.compat === false
+    ? `<span class="flag-error">✖ не для версии ${esc(S.game_version)}</span>`
+    : p.compat ? "✓ подходит к вашей версии игры" : "совместимость не указана";
+  const lines = [];
+  for (const r of p.replaces) lines.push(`Обновит «${esc(r.name)}» ${esc(r.version || "")} (${esc(r.file)})`);
+  if (p.overwrite && !p.replaces.length) lines.push(`Файл ${esc(p.target)} уже есть в папке и будет заменён`);
+  if (p.workshop_twin) lines.push(`<span class="flag-warning">▲ Этот мод уже подписан в Workshop: «${esc(p.workshop_twin)}». Две копии будут мешать друг другу.</span>`);
+  for (const pr of p.problems) lines.push(`<span class="flag-error">✖ ${esc(pr)}</span>`);
+  const id = `pl-${c.id}-${p.id}`;
+  return `<label class="payload" for="${id}">
+    <input type="checkbox" id="${id}" data-payload="${p.id}" ${!p.installable ? "disabled" : p.compat === false ? "" : "checked"}>
+    <span style="min-width:0">
+      <span class="name">${esc(m.name || p.target)}</span> <span class="meta">${esc(m.version ? "v" + m.version : "")} · ${esc(p.target)}</span>
+      <div class="meta">${compat}${p.notes.length ? " · " + esc(p.notes.join(", ")) : ""}</div>
+      ${lines.map((l) => `<div class="meta">${l}</div>`).join("")}
+    </span>
+  </label>`;
+}
+
+function candidateHtml(c) {
+  const head = `<div class="cand-head"><span class="name">${esc(c.name)}</span>
+    <span class="meta">${fmtSize(c.size)} · ${fmtDate(c.mtime)}</span></div>`;
+  if (c.status !== "ready") {
+    return `<article class="cand" data-cand="${c.id}">${head}
+      <p class="${c.status === "needs_tool" ? "flag-warning" : "flag-error"}">${esc(c.error)}</p>
+      <div class="btns"><button class="btn small" data-dismiss="${c.id}">Скрыть</button></div></article>`;
+  }
+  const anyOld = c.payloads.some((p) => p.replaces.length);
+  const prof = S.profile ? `«${esc(S.profile.name)}»` : "";
+  return `<article class="cand" data-cand="${c.id}">${head}
+    ${c.payloads.map((p) => payloadHtml(c, p)).join("")}
+    <div class="opts">
+      ${S.profile && S.profile.writable ? `<label><input type="checkbox" data-opt="enable" checked> Включить в профиле ${prof}</label>` : ""}
+      ${anyOld ? `<label><input type="checkbox" data-opt="remove_old" checked> Убрать старую версию в корзину DeckHaul</label>` : ""}
+      <label><input type="checkbox" data-opt="delete_download" checked> Убрать скачанный файл из загрузок</label>
+    </div>
+    <div class="btns">
+      <button class="btn primary" data-install="${c.id}">Установить</button>
+      <button class="btn small" data-dismiss="${c.id}">Скрыть</button>
+    </div></article>`;
+}
+
+function renderDownloads() {
+  if (!DL) return;
+  const short = (p) => (p && DL.home && p.startsWith(DL.home + "/") ? "~" + p.slice(DL.home.length) : p);
+  $("dl-dir").textContent = short(DL.dir);
+  $("dl-target").textContent = short(DL.target) || "папка игры не найдена";
+  $("dl-busy").hidden = !DL.busy.length;
+  $("dl-busy").textContent = DL.busy.length ? "Ещё скачиваются: " + DL.busy.join(", ") : "";
+  const list = $("dl-list");
+  if (!DL.exists) {
+    list.innerHTML = `<div class="empty"><b>Папки нет</b>Укажите, куда браузер сохраняет файлы, кнопкой «Другая папка».</div>`;
+    return;
+  }
+  list.innerHTML = DL.items.map(candidateHtml).join("") ||
+    `<div class="empty"><b>Новых модов нет</b>Скачайте мод, он появится здесь через несколько секунд после окончания загрузки.</div>`;
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.dismiss) {
+    const id = t.dataset.dismiss;
+    return run("Скрываю", async () => {
+      await api("/api/downloads/dismiss", { id });
+      await loadDownloads(true);
+    });
+  }
+  if (t.dataset.install) {
+    const card = t.closest(".cand");
+    const payloads = [...card.querySelectorAll("input[data-payload]:checked")].map((i) => Number(i.dataset.payload));
+    if (!payloads.length) return toast("Отметьте хотя бы один мод");
+    const opt = (n) => { const i = card.querySelector(`input[data-opt="${n}"]`); return i ? i.checked : false; };
+    return run("Устанавливаю", async () => {
+      const r = await api("/api/downloads/install", {
+        id: t.dataset.install, payloads,
+        enable: opt("enable"), remove_old: opt("remove_old"), delete_download: opt("delete_download"),
+      });
+      setState(await api("/api/state"));
+      await loadDownloads(true);
+      toast(`Установлено: ${r.installed.join(", ")}. ${r.note}`.trim(), 7000);
+    });
+  }
+});
+
+$("dl-dir-change").addEventListener("click", () => {
+  $("dl-dir-form").hidden = false;
+  $("dl-dir-input").value = DL ? DL.dir : "";
+  $("dl-dir-input").focus();
+});
+$("dl-dir-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  run("Сохраняю папку", async () => {
+    DL = await api("/api/downloads/dir", { path: $("dl-dir-input").value.trim() });
+    $("dl-dir-form").hidden = true;
+    renderDownloads();
+  });
+});
+$("dl-dir-reset").addEventListener("click", () => run("Сохраняю папку", async () => {
+  DL = await api("/api/downloads/dir", { path: null });
+  $("dl-dir-form").hidden = true;
+  renderDownloads();
+}));
+
+setInterval(() => {
+  if (!document.hidden && !busy) loadDownloads(false);
+}, 5000);
+
 setInterval(() => fetch("/api/ping").catch(() => {}), 30000);
-load().catch((e) => toast(e.message, 0));
+load().then(() => loadDownloads(false)).catch((e) => toast(e.message, 0));

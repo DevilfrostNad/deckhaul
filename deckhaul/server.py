@@ -68,6 +68,8 @@ def _make_handler(app: App, port: int, state: dict):
                 return self._send(200, data, mime, {"Cache-Control": "max-age=3600"})
             if url.path == "/api/backups":
                 return self._safe(lambda b: {"backups": app.backups()}, {})
+            if url.path == "/api/downloads":
+                return self._safe(lambda b: app.downloads(), {})
             if url.path == "/api/conflicts":
                 key = parse_qs(url.query).get("key", [""])[0]
                 return self._safe(lambda b: app.conflict_details(key), {})
@@ -110,6 +112,11 @@ def _make_handler(app: App, port: int, state: dict):
                 "/api/backup": lambda b: {"backup": app.backup_now()},
                 "/api/restore": lambda b: (app.restore(b["name"]), app.snapshot())[1],
                 "/api/online": lambda b: {"checked": app.online_check(), "state": app.snapshot()},
+                "/api/downloads/install": lambda b: app.install_download(
+                    b["id"], b["payloads"], bool(b.get("enable", True)), bool(b.get("remove_old", True)),
+                    bool(b.get("delete_download", True))),
+                "/api/downloads/dismiss": lambda b: (app.dismiss_download(b["id"]), {"ok": True})[1],
+                "/api/downloads/dir": lambda b: (app.set_downloads_dir(b.get("path")), app.downloads())[1],
                 "/api/game-version": lambda b: (app.set_game_version(b.get("version")), app.snapshot())[1],
             }
             fn = routes.get(urlparse(self.path).path)

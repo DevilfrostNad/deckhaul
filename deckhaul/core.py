@@ -8,12 +8,13 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from . import checks, order, paths, profiles
+from . import checks, installer, order, paths, profiles
 from .archive import ArchiveError, open_container
 from .gamelog import read_game_log
 from .history import History
 from .mods import Mod, ScanCache, scan
 from .profiles import ActiveEntry
+from .sii import version_matches as sii_version_matches
 
 
 class UserError(Exception):
@@ -44,6 +45,9 @@ class App:
         self.new_events: List[dict] = []
         self.online: Dict[int, dict] = {}
         self.scanned_at = 0.0
+        self.staging_root = os.path.join(self.state_dir, "staging")
+        self.trash_root = os.path.join(self.state_dir, "trash")
+        self.download_cache: Dict[str, installer.Candidate] = {}
 
     # ---------------------------------------------------------------- settings
     def _load_settings(self) -> dict:
@@ -194,6 +198,124 @@ class App:
                               f"({len(entries)} шт.)", backup=os.path.basename(backup))
             self.refresh()
             return backup
+
+    # -------------------------------------------------------------- downloads
+    @property
+    def downloads_dir(self) -> str:
+        return installer.downloads_dir(self.settings.get("downloads_dir"))
+
+    def set_downloads_dir(self, path: Optional[str]) -> None:
+        with self.lock:
+            if path and not os.path.isdir(os.path.expanduser(path)):
+                raise UserError("Такой папки нет")
+            if path:
+                self.settings["downloads_dir"] = path
+            else:
+                self.settings.pop("downloads_dir", None)
+            self._save_settings()
+
+    def downloads(self) -> dict:
+        """Analyse new files in the downloads folder (cached by size and mtime)."""
+        with self.lock:
+            folder = self.downloads_dir
+            dismissed = set(self.settings.get("dismissed_downloads", []))
+            files = installer.list_downloads(folder)
+            mod_dir = self.layout.active.mod_dir if self.layout and self.layout.active else ""
+            items, busy, keep = [], [], []
+            for f in files:
+                if f["busy"]:
+                    busy.append(f["name"])
+                    continue
+                fp = installer.fingerprint(f["path"], f["size"], f["mtime"])
+                if fp in dismissed:
+                    continue
+                keep.append(fp)
+                cand = self.download_cache.get(fp)
+                if cand is None:
+                    cand = installer.analyze(f["path"], self.staging_root)
+                    self.download_cache[fp] = cand
+                if mod_dir:
+                    installer.compare_with_installed(cand, mod_dir, self.mods)
+                d = cand.public()
+                for p in d["payloads"]:
+                    comp = (p.get("mod") or {}).get("compatible") or []
+                    p["compat"] = None if not comp or not self.game_version else (
+                        sii_version_matches(self.game_version, comp)
+                        or bool(self.full_version and sii_version_matches(self.full_version, comp))
+                    )
+                items.append(d)
+            installer.cleanup_staging(self.staging_root, keep)
+            self.download_cache = {k: v for k, v in self.download_cache.items() if k in keep}
+            return {
+                "home": os.path.expanduser("~"), "dir": folder, "exists": os.path.isdir(folder), "items": items, "busy": busy,
+                "tool": bool(installer.extract_tool()),
+                "target": mod_dir, "game_running": bool(self.layout and paths.game_running(self.layout.game)),
+            }
+
+    def dismiss_download(self, fp: str) -> None:
+        with self.lock:
+            lst = self.settings.setdefault("dismissed_downloads", [])
+            if fp not in lst:
+                lst.append(fp)
+                del lst[:-200]
+            self._save_settings()
+
+    def _insert_by_group(self, keys: List[str], new_key: str) -> List[str]:
+        m = self.by_key.get(new_key)
+        if m is None:
+            return keys + [new_key]
+        rules = self.rules
+        gi = order.GROUP_INDEX[order.group_of(m, rules, self.overrides)]
+        at = 0
+        for i, k in enumerate(keys):
+            other = self.by_key.get(k)
+            if other is None or order.GROUP_INDEX[order.group_of(other, rules, self.overrides)] <= gi:
+                at = i + 1
+        return keys[:at] + [new_key] + keys[at:]
+
+    def install_download(self, fp: str, payload_ids: List[int], enable: bool,
+                         remove_old: bool, delete_download: bool) -> dict:
+        with self.lock:
+            if not self.layout or not self.layout.active:
+                raise UserError("Не найдена папка игры. Запустите игру один раз и нажмите «Обновить».")
+            cand = self.download_cache.get(fp)
+            if cand is None:
+                raise UserError("Файл изменился или пропал. Обновите список.")
+            mod_dir = self.layout.active.mod_dir
+            installer.compare_with_installed(cand, mod_dir, self.mods)
+            try:
+                res = installer.install(cand, payload_ids, mod_dir, self.trash_root, remove_old, delete_download)
+            except (installer.InstallError, OSError) as exc:
+                raise UserError(str(exc))
+            names = ", ".join(res["installed"])
+            self.history.note("installed", f"Установлено из «{cand.name}»: {names}",
+                              trashed=res["trashed"])
+            self.download_cache.pop(fp, None)
+            self.refresh()
+
+            note = ""
+            prof = self.profile
+            if prof is not None and prof.writable:
+                keys = [e.key for e in prof.active]
+                before = list(keys)
+                for r in res["replaced"]:
+                    if r["old"] in keys:
+                        if r["new"] in keys:
+                            keys.remove(r["old"])
+                        else:
+                            keys[keys.index(r["old"])] = r["new"]
+                if enable:
+                    for k in res["installed"]:
+                        if k not in keys:
+                            keys = self._insert_by_group(keys, k)
+                if keys != before:
+                    if paths.game_running(self.layout.game):
+                        note = "Игра запущена, поэтому профиль не изменён. Включите мод после выхода из игры."
+                    else:
+                        self.apply(keys)
+                        note = f"Профиль «{prof.name}» обновлён, старый сохранён в копию."
+            return {"installed": res["installed"], "replaced": res["replaced"],
+                    "trashed": len(res["trashed"]), "note": note}
 
     def backups(self) -> List[dict]:
         prof = self._require_profile()

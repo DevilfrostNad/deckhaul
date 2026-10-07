@@ -63,6 +63,60 @@ def make_hashfs_v1(path, files):
         fh.write(buf)
 
 
+def build_downloads(dl):
+    """What a user typically has in Downloads after visiting mod sites."""
+    os.makedirs(dl, exist_ok=True)
+    # plain .scs
+    make_zip(os.path.join(dl, "volvo_fh_tuning.scs"), {
+        "manifest.sii": manifest("Volvo FH Tuning", "1.2", cats=("tuning_parts",), compat=("1.53.*",)),
+        "def/vehicle/truck/volvo.fh/accessory.sii": "x",
+    })
+    # zip with two .scs and a readme
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as z:
+        z.writestr("manifest.sii", manifest("Trailer Pack Part 1", "3.0", cats=("trailer",), compat=("1.53.*",)))
+        z.writestr("def/vehicle/trailer/p1/data.sii", "x")
+    inner2 = io.BytesIO()
+    with zipfile.ZipFile(inner2, "w") as z:
+        z.writestr("manifest.sii", manifest("Trailer Pack Part 2", "3.0", cats=("trailer",), compat=("1.53.*",)))
+        z.writestr("def/vehicle/trailer/p2/data.sii", "x")
+    make_zip(os.path.join(dl, "trailer_pack_v3.zip"), {
+        "Trailer Pack/part1.scs": inner.getvalue(),
+        "Trailer Pack/part2.scs": inner2.getvalue(),
+        "Trailer Pack/readme.txt": "Положите файлы в папку mod",
+    })
+    # zip with an extra folder around an unpacked mod
+    make_zip(os.path.join(dl, "Cool Lights 2.0.zip"), {
+        "Cool Lights/manifest.sii": manifest("Cool Lights", "2.0", cats=("graphics",), compat=("1.53.*",)),
+        "Cool Lights/def/light/x.sii": "x",
+        "__MACOSX/._junk": "x",
+    })
+    # update of an installed mod: Real Sounds 5.1, zip that is itself a mod
+    make_zip(os.path.join(dl, "real_sounds_5.1.zip"), {
+        "manifest.sii": manifest("Real Sounds", "5.1", cats=("sound",), compat=("1.53.*",)),
+        "sound/truck/engine.bank": "s" * 60,
+    })
+    # not a mod
+    make_zip(os.path.join(dl, "photos.zip"), {"img1.jpg": "x", "notes.pdf": "y"})
+    # rar that is really a zip (bsdtar detects by content), outdated mod inside
+    make_zip(os.path.join(dl, "old_map.rar"), {
+        "Old Map/old_map.scs": _mod_bytes("Old Map", "0.5", ("map",), ("1.45.*",)),
+    })
+    # download in progress
+    with open(os.path.join(dl, "big_map.zip.crdownload"), "wb") as fh:
+        fh.write(b"PK")
+    with open(os.path.join(dl, "big_map.zip"), "wb") as fh:
+        fh.write(b"PK")
+
+
+def _mod_bytes(name, version, cats, compat):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("manifest.sii", manifest(name, version, cats=cats, compat=compat))
+        z.writestr("def/x.sii", "x")
+    return buf.getvalue()
+
+
 def build(home):
     steam = os.path.join(home, ".local/share/Steam")
     apps = os.path.join(steam, "steamapps")
@@ -174,6 +228,8 @@ def build(home):
     )
     with open(os.path.join(prof, "profile.sii"), "wb") as fh:
         fh.write(encrypt_scsc(text.encode()))
+
+    build_downloads(os.path.join(home, "Downloads"))
 
     # a mod lost in the Proton folder
     pmod = os.path.join(apps, "compatdata", "227300", "pfx", "drive_c", "users", "steamuser",

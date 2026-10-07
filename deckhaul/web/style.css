@@ -226,6 +226,28 @@ h2:first-child { margin-top: 0; }
 }
 .dirty { margin-right: auto; color: var(--warning); }
 
+/* ---------- install */
+.install-head { max-width: 900px; }
+.paths { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0 0 12px; align-items: center; }
+.paths dt { color: var(--muted); font-size: var(--fs-s); }
+.paths dd { margin: 0; overflow-wrap: anywhere; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.dir-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.dir-form .search { flex: 1 1 320px; }
+.cand {
+  background: var(--surface); border-radius: var(--radius);
+  padding: 14px 16px; margin-bottom: 12px; max-width: 900px;
+}
+.cand-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.cand-head .name { font-weight: 600; }
+.payload {
+  display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: start;
+  padding: 10px 0; border-top: 1px solid var(--line); cursor: pointer;
+}
+.payload input, .opts input { width: 22px; height: 22px; margin: 2px 0 0; accent-color: var(--accent); }
+.opts { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; border-top: 1px solid var(--line); }
+.opts label { display: flex; gap: 10px; align-items: center; min-height: 44px; cursor: pointer; }
+.cand .btns { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
 /* ---------- mods table */
 .filters { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .filters .search { max-width: 420px; }

@@ -6,6 +6,8 @@
   python3 -m deckhaul profiles   список профилей
   python3 -m deckhaul backups    резервные копии профиля
   python3 -m deckhaul restore N  восстановить профиль из копии N
+  python3 -m deckhaul downloads  что из «Загрузок» можно установить
+  python3 -m deckhaul install N  установить файл номер N из списка downloads
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ def _print_issues(issues) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="deckhaul", description="Менеджер модов ETS2/ATS для Steam Deck")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "check", "sort", "profiles", "backups", "restore"])
+                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--game", default="ets2", choices=["ets2", "ats"])
     ap.add_argument("--data-dir", help="папка игры с profiles/ и mod/, если не нашлась сама")
@@ -96,6 +98,44 @@ def main(argv=None) -> int:
                 print(f"\nПорядок записан. Копия старого профиля: {backup}")
             elif new != keys:
                 print("\nЧтобы записать этот порядок, добавьте --apply")
+            return 0
+
+        if a.command in ("downloads", "install"):
+            d = app.downloads()
+            print(f"Папка загрузок: {d['dir']}")
+            if d["busy"]:
+                print("Ещё скачиваются: " + ", ".join(d["busy"]))
+            if a.command == "downloads":
+                if not d["items"]:
+                    print("Новых модов нет.")
+                for n, c in enumerate(d["items"], 1):
+                    print(f"{n:3}. {c['name']}")
+                    if c["error"]:
+                        print("       " + c["error"])
+                    for p in c["payloads"]:
+                        m = p.get("mod") or {}
+                        line = f"       → {p['target']}: {m.get('name', '?')} {m.get('version') or ''}".rstrip()
+                        if p.get("compat") is False:
+                            line += f" (не для версии {app.game_version})"
+                        for r in p["replaces"]:
+                            line += f"; заменит {r['name']} {r['version'] or ''}".rstrip()
+                        print(line)
+                if d["items"]:
+                    print("\nУстановить: deckhaul install НОМЕР")
+                return 0
+            try:
+                c = d["items"][int(a.arg) - 1]
+            except (TypeError, ValueError, IndexError):
+                print("Укажите номер из списка: deckhaul downloads")
+                return 2
+            if c["status"] != "ready":
+                print(f"Этот файл установить нельзя: {c['error']}")
+                return 2
+            ids = [p["id"] for p in c["payloads"] if p["installable"]]
+            r = app.install_download(c["id"], ids, enable=True, remove_old=True, delete_download=False)
+            print("Установлено: " + ", ".join(r["installed"]))
+            if r["note"]:
+                print(r["note"])
             return 0
 
         if a.command == "backups":

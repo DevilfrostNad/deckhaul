@@ -2,6 +2,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(__file__)
@@ -91,7 +92,7 @@ class HashFs(unittest.TestCase):
             shutil.rmtree(d)
 
 
-class EndToEnd(unittest.TestCase):
+class _FakeDeck(unittest.TestCase):
     def setUp(self):
         from fixture import build
         self.home = tempfile.mkdtemp()
@@ -107,6 +108,9 @@ class EndToEnd(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.home)
+
+
+class EndToEnd(_FakeDeck):
 
     def test_full_flow(self):
         app = self.App()
@@ -153,6 +157,72 @@ class EndToEnd(unittest.TestCase):
         app.refresh()
         kinds = [(e["kind"], e.get("new")) for e in app.new_events]
         self.assertIn(("updated", "5.1"), kinds)
+
+
+class Downloads(_FakeDeck):
+    def setUp(self):
+        super().setUp()
+        # Fresh files look like downloads still in progress; age them.
+        dl = os.path.join(self.home, "Downloads")
+        old = time.time() - 600
+        for n in os.listdir(dl):
+            os.utime(os.path.join(dl, n), (old, old))
+    def _items(self, app):
+        return {c["name"]: c for c in app.downloads()["items"]}
+
+    def test_analysis(self):
+        app = self.App()
+        app.refresh()
+        d = app.downloads()
+        self.assertIn("big_map.zip", d["busy"])           # .crdownload next to it
+        items = {c["name"]: c for c in d["items"]}
+        self.assertNotIn("big_map.zip", items)
+        self.assertEqual(items["photos.zip"]["status"], "error")
+        tp = items["trailer_pack_v3.zip"]["payloads"]
+        self.assertEqual([p["target"] for p in tp], ["part1.scs", "part2.scs"])
+        cl = items["Cool Lights 2.0.zip"]["payloads"][0]
+        self.assertEqual(cl["target"], "Cool_Lights.scs")
+        self.assertTrue(any("лишняя папка" in n for n in cl["notes"]))
+        rs = items["real_sounds_5.1.zip"]["payloads"][0]
+        self.assertEqual([r["key"] for r in rs["replaces"]], ["real_sounds"])
+        old_map = items["old_map.rar"]
+        if d["tool"]:
+            self.assertFalse(old_map["payloads"][0]["compat"])
+        else:
+            self.assertEqual(old_map["status"], "needs_tool")
+
+    def test_install_update_keeps_position(self):
+        app = self.App()
+        app.refresh()
+        pos = [e.key for e in app.profile.active].index("real_sounds")
+        c = self._items(app)["real_sounds_5.1.zip"]
+        r = app.install_download(c["id"], [0], enable=True, remove_old=True, delete_download=True)
+        self.assertEqual(r["installed"], ["real_sounds_5.1"])
+        keys = [e.key for e in app.profile.active]
+        self.assertEqual(keys[pos], "real_sounds_5.1")
+        self.assertNotIn("real_sounds", keys)
+        mod_dir = app.layout.active.mod_dir
+        self.assertFalse(os.path.exists(os.path.join(mod_dir, "real_sounds.scs")))
+        self.assertTrue(os.path.exists(os.path.join(mod_dir, "real_sounds_5.1.scs")))
+        self.assertNotIn("real_sounds_5.1.zip", self._items(app))
+        self.assertEqual(r["trashed"], 2)
+
+    def test_install_wrapped_folder(self):
+        app = self.App()
+        app.refresh()
+        c = self._items(app)["Cool Lights 2.0.zip"]
+        app.install_download(c["id"], [0], enable=False, remove_old=False, delete_download=False)
+        m = app.by_key["Cool_Lights"]
+        self.assertEqual((m.name, m.version), ("Cool Lights", "2.0"))
+        self.assertEqual(m.scan_problems, [])
+        self.assertNotIn("Cool_Lights", [e.key for e in app.profile.active])
+
+    def test_dismiss(self):
+        app = self.App()
+        app.refresh()
+        c = self._items(app)["photos.zip"]
+        app.dismiss_download(c["id"])
+        self.assertNotIn("photos.zip", self._items(app))
 
 
 if __name__ == "__main__":
