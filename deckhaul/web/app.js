@@ -783,5 +783,73 @@ setInterval(() => {
   if (!document.hidden && !busy) loadDownloads(false);
 }, 5000);
 
+// ---------------------------------------------------------------- update
+let UPD = null;
+
+function renderUpdate() {
+  const el = $("update");
+  if (!UPD) { el.innerHTML = ""; return; }
+  const checked = UPD.checked ? `Проверено ${fmtDate(UPD.checked)}.` : "Ещё не проверялось.";
+  let body;
+  if (UPD.available) {
+    body = `<p><b>Вышла версия ${esc(UPD.latest.replace(/^v/, ""))}</b>, у вас ${esc(UPD.current)}.</p>
+      ${UPD.notes ? `<div class="notes">${esc(UPD.notes)}</div>` : ""}
+      ${UPD.can_apply
+        ? `<button class="btn primary" data-act="update-apply">Обновить DeckHaul</button>
+           <span class="meta">Займёт несколько секунд, потом страница перезагрузится сама.</span>`
+        : `<p class="meta">Эта копия запущена из папки с исходниками. Обновите её командой <code>git pull</code>.</p>`}`;
+  } else {
+    body = `<p>У вас DeckHaul ${esc(UPD.current)}${UPD.latest ? ", это последняя версия" : ""}.</p>`;
+  }
+  el.innerHTML = `<h2>Версия DeckHaul</h2>${body}
+    ${UPD.error ? `<p class="flag-warning">▲ ${esc(UPD.error)}</p>` : ""}
+    <div class="btns">
+      <button class="btn small" data-act="update-check">Проверить сейчас</button>
+      <label class="check"><input type="checkbox" id="upd-auto" ${UPD.auto ? "checked" : ""}> Проверять раз в день</label>
+    </div>
+    <p class="meta">${checked} DeckHaul обращается только к GitHub и ничего о вас не передаёт.</p>
+    <h2>Изменения модов</h2>`;
+  $("upd-auto").onchange = (e) => run("Сохраняю", async () => {
+    UPD = await api("/api/update/auto", { on: e.target.checked });
+    renderUpdate();
+  });
+}
+
+async function loadUpdate() {
+  try { UPD = await api("/api/update"); } catch (e) { return; }
+  renderUpdate();
+  if (UPD.available) {
+    $("c-history").textContent = "новая версия";
+    toast(`Вышел DeckHaul ${UPD.latest.replace(/^v/, "")}. Обновить можно на вкладке «Изменения».`, 7000);
+  }
+}
+
+async function waitForRestart() {
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const r = await fetch("/api/ping", { cache: "no-store" });
+      if (r.ok && i > 1) return location.reload();
+    } catch (e) { /* server is restarting */ }
+  }
+  toast("DeckHaul не перезапустился сам. Закройте окно и откройте программу снова.", 0);
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.act === "update-check") return run("Проверяю обновления", async () => {
+    UPD = await api("/api/update/check", {});
+    renderUpdate();
+    toast(UPD.error ? UPD.error : UPD.available ? `Доступна версия ${UPD.latest.replace(/^v/, "")}` : "У вас последняя версия");
+  });
+  if (t.dataset.act === "update-apply") return run("Обновляю DeckHaul", async () => {
+    if (isDirty() && !confirm("Несохранённый порядок модов будет потерян. Обновить?")) return;
+    const r = await api("/api/update/apply", {});
+    toast(`Установлена версия ${r.installed.replace(/^v/, "")}. Перезапускаю…`, 0);
+    await waitForRestart();
+  });
+});
+
 setInterval(() => fetch("/api/ping").catch(() => {}), 30000);
-load().then(() => loadDownloads(false)).catch((e) => toast(e.message, 0));
+load().then(() => { loadDownloads(false); loadUpdate(); }).catch((e) => toast(e.message, 0));

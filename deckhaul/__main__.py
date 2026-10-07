@@ -9,6 +9,7 @@
   python3 -m deckhaul downloads  что из «Загрузок» можно установить
   python3 -m deckhaul install N  установить файл номер N из списка downloads
   python3 -m deckhaul folders    папки, где искать скачанные моды
+  python3 -m deckhaul update     проверить новую версию DeckHaul и установить её
   python3 -m deckhaul folder-add ПУТЬ / folder-remove ПУТЬ
 """
 
@@ -40,7 +41,7 @@ def _print_issues(issues) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="deckhaul", description="Менеджер модов ETS2/ATS для Steam Deck")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove"])
+                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--game", default="ets2", choices=["ets2", "ats"])
     ap.add_argument("--data-dir", help="папка игры с profiles/ и mod/, если не нашлась сама")
@@ -101,6 +102,24 @@ def main(argv=None) -> int:
                 print(f"\nПорядок записан. Копия старого профиля: {backup}")
             elif new != keys:
                 print("\nЧтобы записать этот порядок, добавьте --apply")
+            return 0
+
+        if a.command == "update":
+            st = app.update_status(force=True)
+            if st["error"]:
+                print(st["error"])
+                return 2
+            print(f"Установлена версия {st['current']}, последняя — {(st['latest'] or '?').lstrip('v')}")
+            if not st["available"]:
+                print("Обновлений нет.")
+                return 0
+            if st["notes"]:
+                print("\n" + st["notes"] + "\n")
+            if not st["can_apply"]:
+                print("Эта копия запущена не из установленной папки. Обновите её командой git pull.")
+                return 0
+            print("Устанавливаю " + app.apply_update() + "…")
+            print("Готово. Перезапустите DeckHaul, если он открыт.")
             return 0
 
         if a.command in ("folders", "folder-add", "folder-remove"):

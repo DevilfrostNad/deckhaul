@@ -8,7 +8,7 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from . import checks, installer, order, paths, profiles
+from . import __version__, checks, installer, order, paths, profiles, updater
 from .archive import ArchiveError, open_container
 from .gamelog import read_game_log
 from .history import History
@@ -48,6 +48,7 @@ class App:
         self.staging_root = os.path.join(self.state_dir, "staging")
         self.trash_root = os.path.join(self.state_dir, "trash")
         self.download_cache: Dict[str, installer.Candidate] = {}
+        self.updater = updater.Updater(self.state_dir)
 
     # ---------------------------------------------------------------- settings
     def _load_settings(self) -> dict:
@@ -551,6 +552,35 @@ class App:
         )
         return {"mod": me.name, "total": len(me.hashes), "lost": len(rows), "rows": rows[:limit]}
 
+    # ----------------------------------------------------------------- update
+    @property
+    def auto_update_check(self) -> bool:
+        return self.settings.get("auto_update_check", True)
+
+    def set_auto_update_check(self, on: bool) -> None:
+        self.settings["auto_update_check"] = bool(on)
+        self._save_settings()
+
+    def update_status(self, force: bool = False) -> dict:
+        if force or self.auto_update_check:
+            st = self.updater.check(force=force)
+        else:
+            st = self.updater.status()
+        st["auto"] = self.auto_update_check
+        return st
+
+    def apply_update(self) -> str:
+        with self.lock:
+            st = self.updater.status()
+            if not st["available"]:
+                raise UserError("Обновлений нет")
+            try:
+                tag = self.updater.apply(st["latest"])
+            except updater.UpdateError as exc:
+                raise UserError(str(exc))
+            self.history.note("app_update", f"DeckHaul обновлён: {st['current']} → {tag.lstrip('v')}")
+            return tag
+
     # --------------------------------------------------------------- snapshot
     def snapshot(self) -> dict:
         with self.lock:
@@ -572,7 +602,7 @@ class App:
                                  "source": "workshop" if k.startswith("mod_workshop_package.") else "local",
                                  "group": "top"})
             return {
-                "app": {"version": "1.0.0", "scanned_at": self.scanned_at},
+                "app": {"version": __version__, "scanned_at": self.scanned_at},
                 "layout": self.layout.to_dict() if self.layout else None,
                 "game_version": self.game_version,
                 "game_version_full": self.full_version,

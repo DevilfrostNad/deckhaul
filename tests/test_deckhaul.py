@@ -312,5 +312,91 @@ class Downloads(_FakeDeck):
         self.assertEqual(app.browse("/no/such/dir")["path"], os.path.realpath(self.home))
 
 
+class Updates(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    @staticmethod
+    def _fetch(responses):
+        def fetch(url, timeout=15.0):
+            for key, body in responses.items():
+                if key in url:
+                    return body
+            raise OSError("404 " + url)
+        return fetch
+
+    def test_versions_and_notes(self):
+        from deckhaul import updater
+        self.assertEqual(updater.parse_version("v1.10.2"), (1, 10, 2))
+        self.assertIsNone(updater.parse_version("latest"))
+        tags = b'[{"name": "v1.0.0"}, {"name": "v9.2.0"}, {"name": "v9.10.0"}, {"name": "test"}]'
+        notes = "# x\n\n## 9.10.0 \u2014 date\n\n- one\n- two\n\n## 9.2.0\n\n- old\n".encode()
+        u = updater.Updater(self.tmp, fetch=self._fetch({"/tags": tags, "CHANGELOG.md": notes}))
+        st = u.check(force=True)
+        self.assertEqual(st["latest"], "v9.10.0")
+        self.assertTrue(st["available"])
+        self.assertEqual(st["notes"], "- one\n- two")
+        # cached: no network on the next call
+        u.fetch = self._fetch({})
+        self.assertTrue(u.check()["available"])
+
+    def test_offline(self):
+        from deckhaul import updater
+        st = updater.Updater(self.tmp, fetch=self._fetch({})).check(force=True)
+        self.assertFalse(st["available"])
+        self.assertIn("GitHub", st["error"])
+
+    def _tarball(self, extra=None):
+        import tarfile
+        repo = os.path.join(HERE, "..")
+        path = os.path.join(self.tmp, "src.tar.gz")
+        with tarfile.open(path, "w:gz") as tf:
+            for name in ("deckhaul", "install.sh", "assets"):
+                tf.add(os.path.join(repo, name), arcname="deckhaul-9.9.9/" + name,
+                       filter=lambda ti: None if "__pycache__" in ti.name else ti)
+            if extra:
+                extra(tf)
+        return path
+
+    def test_apply_runs_installer(self):
+        from deckhaul import updater
+        tarball = self._tarball()
+        with open(tarball, "rb") as fh:
+            blob = fh.read()
+        home = os.path.join(self.tmp, "home")
+        os.makedirs(home)
+        old_home = os.environ.get("HOME")
+        os.environ["HOME"] = home
+        try:
+            u = updater.Updater(self.tmp, fetch=self._fetch({"archive": blob}))
+            self.assertEqual(u.apply("v9.9.9", archive_url="https://example/archive.tar.gz"), "v9.9.9")
+        finally:
+            os.environ["HOME"] = old_home
+        app_dir = os.path.join(home, ".local/share/deckhaul-app/deckhaul")
+        self.assertTrue(os.path.isfile(os.path.join(app_dir, "updater.py")))
+        self.assertTrue(os.access(os.path.join(home, ".local/bin/deckhaul"), os.X_OK))
+
+    def test_rejects_path_escape(self):
+        import io
+        import tarfile
+        from deckhaul import updater
+
+        def evil(tf):
+            data = b"x"
+            ti = tarfile.TarInfo("deckhaul-9.9.9/../../escape.txt")
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+        tarball = self._tarball(evil)
+        with open(tarball, "rb") as fh:
+            blob = fh.read()
+        u = updater.Updater(self.tmp, fetch=self._fetch({"archive": blob}))
+        with self.assertRaises(updater.UpdateError):
+            u.apply("v9.9.9", archive_url="https://example/archive.tar.gz")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "..", "escape.txt")))
+
+
 if __name__ == "__main__":
     unittest.main()

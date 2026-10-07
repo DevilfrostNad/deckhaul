@@ -16,6 +16,12 @@ python3 - <<'PY' || { echo "Нужен Python 3.8 или новее" >&2; exit 1
 import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)
 PY
 
+# A running copy keeps the old code in memory: stop it, the launcher starts the new one.
+# The in-app updater restarts itself and sets DECKHAUL_SELF_UPDATE.
+if [ -z "${DECKHAUL_SELF_UPDATE:-}" ] && pkill -f "python3 -m deckhaul serve" 2>/dev/null; then
+  echo "Открытый DeckHaul закрыт, запустите его снова после установки."
+fi
+
 mkdir -p "$APP" "$BIN" "$(dirname "$DESKTOP")"
 rm -rf "$APP/deckhaul"
 cp -r "$SRC/deckhaul" "$APP/"
@@ -71,7 +77,8 @@ Categories=Game;Utility;
 DESK
 chmod +x "$DESKTOP"
 
-echo "Готово. DeckHaul есть в меню приложений, раздел «Игры»."
+VERSION="$(PYTHONPATH="$APP" python3 -c 'import deckhaul; print(deckhaul.__version__)')"
+echo "Готово: DeckHaul $VERSION. Он есть в меню приложений, раздел «Игры»."
 echo "Из Konsole: $BIN/deckhaul check — отчёт о проблемах без окна."
 
 if [ "${1:-}" = "--add-to-steam" ] && command -v steamos-add-to-steam >/dev/null; then
