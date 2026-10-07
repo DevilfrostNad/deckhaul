@@ -200,54 +200,121 @@ class App:
             return backup
 
     # -------------------------------------------------------------- downloads
-    @property
-    def downloads_dir(self) -> str:
-        return installer.downloads_dir(self.settings.get("downloads_dir"))
+    ANALYZE_PER_CALL = 4   # big archives are unpacked; spread the work over polls
 
-    def set_downloads_dir(self, path: Optional[str]) -> None:
+    @property
+    def download_dirs(self) -> List[str]:
+        """Folders searched for downloaded mods. The system Downloads folder by default."""
+        dirs = self.settings.get("download_dirs")
+        if dirs is None:
+            legacy = self.settings.get("downloads_dir")
+            dirs = [legacy] if legacy else [installer.downloads_dir()]
+        return [os.path.expanduser(d) for d in dirs]
+
+    def _save_download_dirs(self, dirs: List[str]) -> None:
+        self.settings["download_dirs"] = dirs
+        self.settings.pop("downloads_dir", None)
+        self._save_settings()
+
+    def add_download_dir(self, path: str) -> None:
         with self.lock:
-            if path and not os.path.isdir(os.path.expanduser(path)):
+            path = os.path.realpath(os.path.expanduser((path or "").strip()))
+            if not os.path.isdir(path):
                 raise UserError("Такой папки нет")
-            if path:
-                self.settings["downloads_dir"] = path
-            else:
-                self.settings.pop("downloads_dir", None)
-            self._save_settings()
+            mod_dir = self.layout.active.mod_dir if self.layout and self.layout.active else None
+            if mod_dir and os.path.realpath(mod_dir) == path:
+                raise UserError("Это папка mod самой игры. Выберите папку, куда вы скачиваете моды.")
+            dirs = self.download_dirs
+            if path in [os.path.realpath(d) for d in dirs]:
+                raise UserError("Эта папка уже в списке")
+            self._save_download_dirs(dirs + [path])
+
+    def remove_download_dir(self, path: str) -> None:
+        with self.lock:
+            target = os.path.realpath(os.path.expanduser(path))
+            dirs = [d for d in self.download_dirs if os.path.realpath(d) != target]
+            self._save_download_dirs(dirs)
+
+    def browse(self, path: Optional[str]) -> dict:
+        """List subfolders for the folder picker in the UI."""
+        home = os.path.expanduser("~")
+        path = os.path.realpath(os.path.expanduser(path or home))
+        if not os.path.isdir(path):
+            path = os.path.realpath(home)
+        try:
+            names = sorted((n for n in os.listdir(path)
+                            if not n.startswith(".") and os.path.isdir(os.path.join(path, n))),
+                           key=str.lower)
+        except OSError:
+            names = []
+        try:
+            archives = sum(1 for n in os.listdir(path) if n.lower().endswith(installer.ARCHIVE_EXTS))
+        except OSError:
+            archives = 0
+        places = [{"title": "Домашняя папка", "path": home},
+                  {"title": "Загрузки", "path": installer.downloads_dir()}]
+        for base in ("/run/media", "/run/media/" + os.path.basename(home), "/media", "/Volumes"):
+            try:
+                for n in sorted(os.listdir(base)):
+                    full = os.path.join(base, n)
+                    if os.path.isdir(full) and os.path.ismount(full):
+                        places.append({"title": f"Диск {n}", "path": full})
+            except OSError:
+                continue
+        parent = os.path.dirname(path)
+        return {"path": path, "parent": parent if parent != path else None, "dirs": names,
+                "archives": archives, "places": places, "home": home}
 
     def downloads(self) -> dict:
-        """Analyse new files in the downloads folder (cached by size and mtime)."""
+        """Analyse new files in the download folders (cached by size and mtime)."""
         with self.lock:
-            folder = self.downloads_dir
+            dirs = self.download_dirs
+            default_dir = installer.downloads_dir()
             dismissed = set(self.settings.get("dismissed_downloads", []))
-            files = installer.list_downloads(folder)
             mod_dir = self.layout.active.mod_dir if self.layout and self.layout.active else ""
             items, busy, keep = [], [], []
-            for f in files:
-                if f["busy"]:
-                    busy.append(f["name"])
-                    continue
-                fp = installer.fingerprint(f["path"], f["size"], f["mtime"])
-                if fp in dismissed:
-                    continue
-                keep.append(fp)
-                cand = self.download_cache.get(fp)
-                if cand is None:
-                    cand = installer.analyze(f["path"], self.staging_root)
-                    self.download_cache[fp] = cand
-                if mod_dir:
-                    installer.compare_with_installed(cand, mod_dir, self.mods)
-                d = cand.public()
-                for p in d["payloads"]:
-                    comp = (p.get("mod") or {}).get("compatible") or []
-                    p["compat"] = None if not comp or not self.game_version else (
-                        sii_version_matches(self.game_version, comp)
-                        or bool(self.full_version and sii_version_matches(self.full_version, comp))
-                    )
-                items.append(d)
+            budget = self.ANALYZE_PER_CALL
+            pending = 0
+            for folder in dirs:
+                for f in installer.list_downloads(folder):
+                    if f["busy"]:
+                        busy.append(f["name"])
+                        continue
+                    fp = installer.fingerprint(f["path"], f["size"], f["mtime"])
+                    if fp in dismissed:
+                        continue
+                    keep.append(fp)
+                    cand = self.download_cache.get(fp)
+                    if cand is None:
+                        if budget <= 0:
+                            pending += 1
+                            items.append({"id": fp, "name": f["name"], "size": f["size"],
+                                          "mtime": f["mtime"], "status": "pending", "error": "",
+                                          "payloads": [], "folder": folder})
+                            continue
+                        budget -= 1
+                        cand = installer.analyze(f["path"], self.staging_root)
+                        self.download_cache[fp] = cand
+                    if mod_dir:
+                        installer.compare_with_installed(cand, mod_dir, self.mods)
+                    d = cand.public()
+                    d["folder"] = folder
+                    d["is_default_dir"] = os.path.realpath(folder) == os.path.realpath(default_dir)
+                    for p in d["payloads"]:
+                        comp = (p.get("mod") or {}).get("compatible") or []
+                        p["compat"] = None if not comp or not self.game_version else (
+                            sii_version_matches(self.game_version, comp)
+                            or bool(self.full_version and sii_version_matches(self.full_version, comp))
+                        )
+                    d["already"] = bool(d["payloads"]) and all(p["already"] for p in d["payloads"])
+                    items.append(d)
             installer.cleanup_staging(self.staging_root, keep)
             self.download_cache = {k: v for k, v in self.download_cache.items() if k in keep}
             return {
-                "home": os.path.expanduser("~"), "dir": folder, "exists": os.path.isdir(folder), "items": items, "busy": busy,
+                "home": os.path.expanduser("~"),
+                "dirs": [{"path": d, "exists": os.path.isdir(d),
+                          "default": os.path.realpath(d) == os.path.realpath(default_dir)} for d in dirs],
+                "items": items, "busy": busy, "pending": pending,
                 "tool": bool(installer.extract_tool()),
                 "target": mod_dir, "game_running": bool(self.layout and paths.game_running(self.layout.game)),
             }

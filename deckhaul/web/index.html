@@ -36,16 +36,10 @@
     <div class="install-head">
       <p class="hint">Скачайте мод браузером как обычно. DeckHaul найдёт его в папке загрузок,
         проверит, распакует и положит в папку игры.</p>
-      <dl class="paths">
-        <dt>Ищу в</dt><dd><span id="dl-dir"></span> <button id="dl-dir-change" class="btn small">Другая папка</button></dd>
-        <dt>Ставлю в</dt><dd id="dl-target"></dd>
-      </dl>
-      <form id="dl-dir-form" class="dir-form" hidden>
-        <label class="field-label" for="dl-dir-input">Папка загрузок</label>
-        <input id="dl-dir-input" class="search" type="text" spellcheck="false">
-        <button class="btn small primary" type="submit">Сохранить</button>
-        <button class="btn small" type="button" id="dl-dir-reset">По умолчанию</button>
-      </form>
+      <h2>Где искать</h2>
+      <ul id="dl-dirs" class="dirs"></ul>
+      <button id="dl-dir-add" class="btn">Добавить папку</button>
+      <p class="hint" style="margin-top:12px">Моды попадут в <span id="dl-target"></span></p>
       <p id="dl-busy" class="hint" hidden></p>
     </div>
     <div id="dl-list"></div>
@@ -109,6 +103,21 @@
 </main>
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<dialog id="picker" aria-labelledby="picker-title">
+  <h2 id="picker-title">Папка со скачанными модами</h2>
+  <div id="picker-places" class="places"></div>
+  <form id="picker-form" class="dir-form">
+    <input id="picker-path" class="search" type="text" spellcheck="false" aria-label="Путь к папке">
+    <button class="btn small" type="submit">Перейти</button>
+  </form>
+  <p id="picker-info" class="hint"></p>
+  <ul id="picker-dirs" class="picker-dirs"></ul>
+  <div class="picker-actions">
+    <button id="picker-cancel" class="btn" type="button">Отмена</button>
+    <button id="picker-choose" class="btn primary" type="button">Искать в этой папке</button>
+  </div>
+</dialog>
 
 <dialog id="dialog">
   <h2 id="dialog-title"></h2>

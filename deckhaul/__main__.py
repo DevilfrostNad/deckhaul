@@ -8,12 +8,15 @@
   python3 -m deckhaul restore N  восстановить профиль из копии N
   python3 -m deckhaul downloads  что из «Загрузок» можно установить
   python3 -m deckhaul install N  установить файл номер N из списка downloads
+  python3 -m deckhaul folders    папки, где искать скачанные моды
+  python3 -m deckhaul folder-add ПУТЬ / folder-remove ПУТЬ
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from .core import App, UserError
@@ -37,7 +40,7 @@ def _print_issues(issues) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="deckhaul", description="Менеджер модов ETS2/ATS для Steam Deck")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install"])
+                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--game", default="ets2", choices=["ets2", "ats"])
     ap.add_argument("--data-dir", help="папка игры с profiles/ и mod/, если не нашлась сама")
@@ -100,9 +103,24 @@ def main(argv=None) -> int:
                 print("\nЧтобы записать этот порядок, добавьте --apply")
             return 0
 
+        if a.command in ("folders", "folder-add", "folder-remove"):
+            if a.command != "folders":
+                if not a.arg:
+                    print("Укажите путь к папке")
+                    return 2
+                if a.command == "folder-add":
+                    app.add_download_dir(a.arg)
+                else:
+                    app.remove_download_dir(os.path.realpath(os.path.expanduser(a.arg)))
+            for d in app.download_dirs:
+                print(d)
+            return 0
+
         if a.command in ("downloads", "install"):
             d = app.downloads()
-            print(f"Папка загрузок: {d['dir']}")
+            while d["pending"]:
+                d = app.downloads()
+            print("Ищу в: " + ", ".join(x["path"] for x in d["dirs"]))
             if d["busy"]:
                 print("Ещё скачиваются: " + ", ".join(d["busy"]))
             if a.command == "downloads":

@@ -228,9 +228,22 @@ h2:first-child { margin-top: 0; }
 
 /* ---------- install */
 .install-head { max-width: 900px; }
-.paths { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0 0 12px; align-items: center; }
-.paths dt { color: var(--muted); font-size: var(--fs-s); }
-.paths dd { margin: 0; overflow-wrap: anywhere; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.dirs { list-style: none; margin: 0 0 12px; padding: 0; }
+.dirs li {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+.dirs .meta { margin-left: 8px; }
+.done { max-width: 900px; margin-top: 8px; }
+.done summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; color: var(--muted); }
+.places { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.picker-dirs { list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow: auto; border-top: 1px solid var(--line); }
+.pick-row {
+  width: 100%; min-height: 44px; text-align: left; padding: 0 12px;
+  background: none; border: 0; border-bottom: 1px solid var(--line); cursor: pointer;
+}
+.pick-row:hover { background: var(--surface-2); }
+.picker-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .dir-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .dir-form .search { flex: 1 1 320px; }
 .cand {

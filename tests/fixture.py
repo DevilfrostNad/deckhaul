@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import struct
 import sys
 import zipfile
@@ -230,6 +231,15 @@ def build(home):
         fh.write(encrypt_scsc(text.encode()))
 
     build_downloads(os.path.join(home, "Downloads"))
+
+    # a personal mod library outside Downloads: one mod already installed, one new
+    lib = os.path.join(home, "Games", "ETS2 Mods")
+    os.makedirs(lib, exist_ok=True)
+    shutil.copy(os.path.join(mod, "scania_super.scs"), os.path.join(lib, "scania_super.scs"))
+    make_zip(os.path.join(lib, "daf_xg_interior.scs"), {
+        "manifest.sii": manifest("DAF XG Interior", "1.0", cats=("interior",), compat=("1.53.*",)),
+        "def/vehicle/truck/daf.xg/interior.sii": "x",
+    })
 
     # a mod lost in the Proton folder
     pmod = os.path.join(apps, "compatdata", "227300", "pfx", "drive_c", "users", "steamuser",

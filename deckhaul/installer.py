@@ -75,6 +75,7 @@ class Payload:
     problems: List[str] = field(default_factory=list)
     replaces: List[dict] = field(default_factory=list)   # older copies already installed
     overwrite: bool = False        # a file with this name is already in mod/
+    already: bool = False          # exactly this mod is already installed
     workshop_twin: Optional[str] = None
     installable: bool = True
 
@@ -323,7 +324,12 @@ def compare_with_installed(cand: Candidate, mod_dir: str, installed: List[Mod]) 
     existing = {n.lower() for n in os.listdir(mod_dir)} if os.path.isdir(mod_dir) else set()
     for p in cand.payloads:
         p.overwrite = p.target.lower() in existing
-        p.replaces, p.workshop_twin = [], None
+        p.replaces, p.workshop_twin, p.already = [], None, False
+        if p.overwrite:
+            try:
+                p.already = os.path.getsize(os.path.join(mod_dir, p.target)) == os.path.getsize(p.src)
+            except OSError:
+                pass
         if not p.mod:
             continue
         name = (p.mod.get("name") or "").strip().lower()
@@ -335,6 +341,9 @@ def compare_with_installed(cand: Candidate, mod_dir: str, installed: List[Mod]) 
                 continue
             if m.source == "workshop":
                 p.workshop_twin = m.name
+                continue
+            if m.version and m.version == p.mod.get("version") and same_name:
+                p.already = True
                 continue
             p.replaces.append({"key": m.key, "name": m.name, "version": m.version,
                                "file": os.path.basename(m.path)})

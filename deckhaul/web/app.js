@@ -579,7 +579,7 @@ function padLoop() {
     if (hit(14)) focusStep(-1);
     if (hit(15)) focusStep(1);
     if (hit(0) && document.activeElement) document.activeElement.click();
-    if (hit(1)) { if ($("dialog").open) $("dialog").close(); else if (picked) { picked = null; renderOrder(); } }
+    if (hit(1)) { if ($("picker").open) $("picker").close(); else if ($("dialog").open) $("dialog").close(); else if (picked) { picked = null; renderOrder(); } }
     if (hit(2) && onRow) sendKey("Enter");
     if (hit(3) && currentTab() === "order") autosort();
     if (hit(4)) cycleTab(-1);
@@ -609,15 +609,17 @@ async function loadDownloads(render) {
     if (render) toast(e.message);
     return;
   }
-  const ready = DL.items.filter((c) => c.status === "ready");
+  const ready = DL.items.filter((c) => c.status === "ready" && !c.already);
   $("c-install").textContent = ready.length ? String(ready.length) : "";
+  // Files still being analysed count as seen too, so they do not pop up as "new" later.
   const fresh = ready.filter((c) => !seenDownloads.has(c.id));
-  ready.forEach((c) => seenDownloads.add(c.id));
+  DL.items.forEach((c) => seenDownloads.add(c.id));
   if (!firstDownloadsLoad && fresh.length && currentTab() !== "install") {
     toast(`В загрузках новый мод: ${fresh[0].name}. Откройте вкладку «Установка».`, 6000);
   }
   firstDownloadsLoad = false;
   if (render || currentTab() === "install") renderDownloads();
+  if (DL.pending) setTimeout(() => loadDownloads(false), 300);
 }
 
 function payloadHtml(c, p) {
@@ -643,7 +645,10 @@ function payloadHtml(c, p) {
 
 function candidateHtml(c) {
   const head = `<div class="cand-head"><span class="name">${esc(c.name)}</span>
-    <span class="meta">${fmtSize(c.size)} · ${fmtDate(c.mtime)}</span></div>`;
+    <span class="meta">${fmtSize(c.size)} · ${fmtDate(c.mtime)}${DL.dirs.length > 1 ? " · " + esc(c.folder.split("/").pop()) : ""}</span></div>`;
+  if (c.status === "pending") {
+    return `<article class="cand">${head}<p class="meta">Разбираю архив…</p></article>`;
+  }
   if (c.status !== "ready") {
     return `<article class="cand" data-cand="${c.id}">${head}
       <p class="${c.status === "needs_tool" ? "flag-warning" : "flag-error"}">${esc(c.error)}</p>
@@ -656,28 +661,32 @@ function candidateHtml(c) {
     <div class="opts">
       ${S.profile && S.profile.writable ? `<label><input type="checkbox" data-opt="enable" checked> Включить в профиле ${prof}</label>` : ""}
       ${anyOld ? `<label><input type="checkbox" data-opt="remove_old" checked> Убрать старую версию в корзину DeckHaul</label>` : ""}
-      <label><input type="checkbox" data-opt="delete_download" checked> Убрать скачанный файл из загрузок</label>
+      <label><input type="checkbox" data-opt="delete_download" ${c.is_default_dir ? "checked" : ""}> Убрать исходный файл в корзину DeckHaul</label>
     </div>
     <div class="btns">
-      <button class="btn primary" data-install="${c.id}">Установить</button>
+      <button class="btn primary" data-install="${c.id}">${c.already ? "Установить заново" : "Установить"}</button>
       <button class="btn small" data-dismiss="${c.id}">Скрыть</button>
     </div></article>`;
 }
 
 function renderDownloads() {
   if (!DL) return;
-  const short = (p) => (p && DL.home && p.startsWith(DL.home + "/") ? "~" + p.slice(DL.home.length) : p);
-  $("dl-dir").textContent = short(DL.dir);
-  $("dl-target").textContent = short(DL.target) || "папка игры не найдена";
+  const short = (p) => (p && DL.home && (p === DL.home || p.startsWith(DL.home + "/")) ? "~" + p.slice(DL.home.length) : p);
+  $("dl-target").textContent = short(DL.target) || "папку игры, когда она найдётся";
+  $("dl-dirs").innerHTML = DL.dirs.map((d) => `<li>
+      <span style="min-width:0"><span class="name">${esc(short(d.path))}</span>
+      ${d.default ? `<span class="meta">загрузки браузера</span>` : ""}
+      ${d.exists ? "" : `<span class="meta flag-error">✖ папки нет</span>`}</span>
+      <button class="btn small" data-dir-remove="${esc(d.path)}">Не искать здесь</button>
+    </li>`).join("") || `<li class="meta">Ни одной папки. Добавьте папку, куда вы скачиваете моды.</li>`;
   $("dl-busy").hidden = !DL.busy.length;
   $("dl-busy").textContent = DL.busy.length ? "Ещё скачиваются: " + DL.busy.join(", ") : "";
   const list = $("dl-list");
-  if (!DL.exists) {
-    list.innerHTML = `<div class="empty"><b>Папки нет</b>Укажите, куда браузер сохраняет файлы, кнопкой «Другая папка».</div>`;
-    return;
-  }
-  list.innerHTML = DL.items.map(candidateHtml).join("") ||
-    `<div class="empty"><b>Новых модов нет</b>Скачайте мод, он появится здесь через несколько секунд после окончания загрузки.</div>`;
+  const fresh = DL.items.filter((c) => !c.already);
+  const done = DL.items.filter((c) => c.already);
+  list.innerHTML = (fresh.map(candidateHtml).join("") ||
+    `<div class="empty"><b>Новых модов нет</b>Скачайте мод, он появится здесь через несколько секунд после окончания загрузки.</div>`) +
+    (done.length ? `<details class="done"><summary>Уже установлены: ${done.length}</summary>${done.map(candidateHtml).join("")}</details>` : "");
 }
 
 document.addEventListener("click", (e) => {
@@ -707,24 +716,52 @@ document.addEventListener("click", (e) => {
   }
 });
 
-$("dl-dir-change").addEventListener("click", () => {
-  $("dl-dir-form").hidden = false;
-  $("dl-dir-input").value = DL ? DL.dir : "";
-  $("dl-dir-input").focus();
-});
-$("dl-dir-form").addEventListener("submit", (e) => {
+// folder picker
+let pickerPath = null;
+async function browse(path) {
+  const r = await api("/api/browse" + (path ? "?path=" + encodeURIComponent(path) : ""));
+  pickerPath = r.path;
+  $("picker-path").value = r.path;
+  $("picker-places").innerHTML = r.places.map((p) =>
+    `<button class="btn small" data-browse="${esc(p.path)}">${esc(p.title)}</button>`).join("");
+  $("picker-info").textContent = r.archives
+    ? `В этой папке архивов и модов: ${r.archives}`
+    : "В этой папке нет архивов, но они могут быть во вложенных папках.";
+  const rows = [];
+  if (r.parent) rows.push(`<li><button class="pick-row" data-browse="${esc(r.parent)}">↑ На уровень выше</button></li>`);
+  for (const n of r.dirs) {
+    const full = r.path.replace(/\/$/, "") + "/" + n;
+    rows.push(`<li><button class="pick-row" data-browse="${esc(full)}">${esc(n)}</button></li>`);
+  }
+  $("picker-dirs").innerHTML = rows.join("") || `<li class="meta">Вложенных папок нет</li>`;
+  const first = $("picker-dirs").querySelector("button");
+  if (first) first.focus();
+}
+
+$("dl-dir-add").addEventListener("click", () => run("Открываю папки", async () => {
+  await browse(null);
+  $("picker").showModal();
+}));
+$("picker-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  run("Сохраняю папку", async () => {
-    DL = await api("/api/downloads/dir", { path: $("dl-dir-input").value.trim() });
-    $("dl-dir-form").hidden = true;
+  run("Открываю", () => browse($("picker-path").value.trim()));
+});
+$("picker-cancel").addEventListener("click", () => $("picker").close());
+$("picker-choose").addEventListener("click", () => run("Добавляю папку", async () => {
+  DL = await api("/api/downloads/dirs/add", { path: pickerPath });
+  $("picker").close();
+  renderDownloads();
+  toast("Папка добавлена. Моды из неё появятся в списке.");
+}));
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.browse) return run("Открываю", () => browse(t.dataset.browse));
+  if (t.dataset.dirRemove) return run("Убираю папку", async () => {
+    DL = await api("/api/downloads/dirs/remove", { path: t.dataset.dirRemove });
     renderDownloads();
   });
 });
-$("dl-dir-reset").addEventListener("click", () => run("Сохраняю папку", async () => {
-  DL = await api("/api/downloads/dir", { path: null });
-  $("dl-dir-form").hidden = true;
-  renderDownloads();
-}));
 
 setInterval(() => {
   if (!document.hidden && !busy) loadDownloads(false);

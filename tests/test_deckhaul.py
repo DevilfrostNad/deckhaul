@@ -163,17 +163,24 @@ class Downloads(_FakeDeck):
     def setUp(self):
         super().setUp()
         # Fresh files look like downloads still in progress; age them.
-        dl = os.path.join(self.home, "Downloads")
         old = time.time() - 600
-        for n in os.listdir(dl):
-            os.utime(os.path.join(dl, n), (old, old))
+        for d in ("Downloads", os.path.join("Games", "ETS2 Mods")):
+            dl = os.path.join(self.home, d)
+            for n in os.listdir(dl):
+                os.utime(os.path.join(dl, n), (old, old))
     def _items(self, app):
-        return {c["name"]: c for c in app.downloads()["items"]}
+        d = app.downloads()
+        while d["pending"]:
+            d = app.downloads()
+        return {c["name"]: c for c in d["items"]}
 
     def test_analysis(self):
         app = self.App()
         app.refresh()
         d = app.downloads()
+        self.assertGreater(d["pending"], 0)               # big folders are analysed in portions
+        while d["pending"]:
+            d = app.downloads()
         self.assertIn("big_map.zip", d["busy"])           # .crdownload next to it
         items = {c["name"]: c for c in d["items"]}
         self.assertNotIn("big_map.zip", items)
@@ -223,6 +230,34 @@ class Downloads(_FakeDeck):
         c = self._items(app)["photos.zip"]
         app.dismiss_download(c["id"])
         self.assertNotIn("photos.zip", self._items(app))
+
+
+    def test_extra_folder(self):
+        app = self.App()
+        app.refresh()
+        lib = os.path.join(self.home, "Games", "ETS2 Mods")
+        self.assertNotIn("daf_xg_interior.scs", self._items(app))
+        app.add_download_dir(lib)
+        with self.assertRaises(Exception):
+            app.add_download_dir(lib)                      # no duplicates
+        with self.assertRaises(Exception):
+            app.add_download_dir(app.layout.active.mod_dir)  # never the game's own mod folder
+        items = self._items(app)
+        self.assertFalse(items["daf_xg_interior.scs"]["already"])
+        self.assertFalse(items["daf_xg_interior.scs"]["is_default_dir"])
+        self.assertTrue(items["scania_super.scs"]["already"])
+        self.assertTrue(items["volvo_fh_tuning.scs"]["is_default_dir"])
+        # settings survive a restart
+        self.assertIn(os.path.realpath(lib), [os.path.realpath(d) for d in self.App().download_dirs])
+        app.remove_download_dir(lib)
+        self.assertNotIn("daf_xg_interior.scs", self._items(app))
+
+    def test_browse(self):
+        app = self.App()
+        r = app.browse(os.path.join(self.home, "Games"))
+        self.assertEqual(r["dirs"], ["ETS2 Mods"])
+        self.assertEqual(app.browse(os.path.join(self.home, "Games", "ETS2 Mods"))["archives"], 2)
+        self.assertEqual(app.browse("/no/such/dir")["path"], os.path.realpath(self.home))
 
 
 if __name__ == "__main__":
