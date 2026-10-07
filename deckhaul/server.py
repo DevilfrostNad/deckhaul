@@ -166,7 +166,12 @@ def _restart() -> None:
     args = sys.argv[1:] or ["serve"]
     if "--no-browser" not in args:
         args.append("--no-browser")
-    os.execv(sys.executable, [sys.executable, "-m", "deckhaul"] + args)
+    # Start from this copy's folder explicitly: "-m deckhaul" could pick up
+    # another deckhaul folder from the current directory.
+    boot = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
+            "from deckhaul.__main__ import main; sys.exit(main())")
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.execv(sys.executable, [sys.executable, "-c", boot, here] + args)
 
 
 def serve(app: App, port: int = 8765, open_browser: bool = True, idle_exit: int = 0) -> None:

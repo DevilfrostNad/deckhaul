@@ -18,7 +18,7 @@ PY
 
 # A running copy keeps the old code in memory: stop it, the launcher starts the new one.
 # The in-app updater restarts itself and sets DECKHAUL_SELF_UPDATE.
-if [ -z "${DECKHAUL_SELF_UPDATE:-}" ] && pkill -f "python3 -m deckhaul serve" 2>/dev/null; then
+if [ -z "${DECKHAUL_SELF_UPDATE:-}" ] && pkill -f "(python3 -m deckhaul|deckhaul\.__main__ import main.*) serve" 2>/dev/null; then
   echo "Открытый DeckHaul закрыт, запустите его снова после установки."
 fi
 
@@ -33,15 +33,18 @@ cat > "$BIN/deckhaul" <<'LAUNCH'
 APP="$HOME/.local/share/deckhaul-app"
 STATE="${XDG_DATA_HOME:-$HOME/.local/share}/deckhaul"
 mkdir -p "$STATE"
+# "python3 -m" would prefer a deckhaul folder in the current directory (a git
+# clone, for example). Put the installed copy first on the path explicitly.
+BOOT='import sys; sys.path.insert(0, sys.argv.pop(1)); from deckhaul.__main__ import main; sys.exit(main())'
 if [ "$#" -gt 0 ]; then
-  exec env PYTHONPATH="$APP" python3 -m deckhaul "$@"
+  exec python3 -c "$BOOT" "$APP" "$@"
 fi
 URL=""
 if [ -f "$STATE/url" ] && curl -fs "$(cat "$STATE/url")api/ping" >/dev/null 2>&1; then
   URL="$(cat "$STATE/url")"
 else
   rm -f "$STATE/url"
-  PYTHONPATH="$APP" nohup python3 -m deckhaul serve --no-browser --idle-exit 900 >"$STATE/server.log" 2>&1 &
+  nohup python3 -c "$BOOT" "$APP" serve --no-browser --idle-exit 900 >"$STATE/server.log" 2>&1 &
   for _ in $(seq 1 50); do
     [ -f "$STATE/url" ] && break
     sleep 0.2
@@ -77,7 +80,7 @@ Categories=Game;Utility;
 DESK
 chmod +x "$DESKTOP"
 
-VERSION="$(PYTHONPATH="$APP" python3 -c 'import deckhaul; print(deckhaul.__version__)')"
+VERSION="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import deckhaul; print(deckhaul.__version__)' "$APP")"
 echo "Готово: DeckHaul $VERSION. Он есть в меню приложений, раздел «Игры»."
 echo "Из Konsole: $BIN/deckhaul check — отчёт о проблемах без окна."
 
