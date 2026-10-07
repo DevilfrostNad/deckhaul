@@ -164,6 +164,10 @@ function issueActions(i) {
   const out = [];
   if (i.action === "remove_missing") out.push(`<button class="btn small" data-act="remove" data-key="${esc(i.mod)}">Убрать из списка</button>`);
   if (i.action === "dedupe") out.push(`<button class="btn small" data-act="dedupe">Убрать повтор</button>`);
+  if (i.action === "rollback") {
+    out.push(`<button class="btn small" data-act="rollback" data-point="${esc(i.extra.point)}">Вернуть как было</button>`);
+    out.push(`<button class="btn small" data-act="ack" data-point="${esc(i.extra.point)}">Всё в порядке</button>`);
+  }
   if (i.action === "compat_ok") out.push(`<button class="btn small" data-act="compat-ok" data-key="${esc(i.mod)}">Работает, не предупреждать</button>`);
   if (i.action === "autosort") out.push(`<button class="btn small" data-act="autosort">Упорядочить</button>`);
   if (i.code === "conflict") out.push(`<button class="btn small" data-act="conflicts" data-key="${esc(i.mod)}">Какие файлы</button>`);
@@ -350,15 +354,40 @@ function renderHistory() {
   ).join("") || `<li class="meta">Изменений пока нет. DeckHaul запоминает состояние модов при каждой проверке и покажет здесь, что обновилось.</li>`;
 }
 
+const REASON = {
+  apply: "Сохранение порядка", install: "Установка", rollback: "Возврат", restore: "Возврат старой копии",
+  manual: "Сохранено вами",
+};
+
 async function renderBackups() {
-  if (!S.profile) { $("backups").innerHTML = ""; return; }
+  try {
+    const r = await api("/api/points");
+    $("points").innerHTML = r.points.map((p) => {
+      const title = p.kind === "manual" ? `<b>${esc(p.label)}</b>` : esc(p.summary || REASON[p.reason] || "");
+      const meta = [p.kind === "manual" ? "сохранено вами" : "создано автоматически",
+        p.profile_name && `профиль «${esc(p.profile_name)}»`,
+        p.files_changed ? `файлов изменено: ${p.files_changed}` : ""].filter(Boolean).join(" · ");
+      const own = p.kind === "manual" || p.rolled_back ? 0 : 1;
+      const extra = p.undo_count - own;
+      const later = extra > 0 ? `<div class="meta">Отменит ${own ? "и " : ""}${plural(extra, "более позднее изменение", "более поздних изменения", "более поздних изменений")}</div>`
+        : p.kind === "manual" && !p.undo_count ? `<div class="meta">Сейчас всё так же, как в этой точке</div>` : "";
+      const status = p.rolled_back ? `<div class="meta">Это изменение сейчас отменено</div>` : "";
+      const btn = `<button class="btn small" data-act="rollback" data-point="${esc(p.id)}">${p.kind === "manual" ? "Вернуться к этому состоянию" : "Вернуть как было до этого"}</button>`;
+      return `<li class="${p.rolled_back ? "muted" : ""}">
+        <span class="when">${fmtDate(p.t)}</span>
+        <span class="pt-body"><div>${title}</div><div class="meta">${meta}</div>${status}${later}</span>
+        <span class="pt-btns">${btn}${p.kind === "manual" ? `<button class="btn small" data-act="point-delete" data-point="${esc(p.id)}">Удалить</button>` : ""}</span>
+      </li>`;
+    }).join("") || `<li class="meta">Точек пока нет. Первая появится перед первым изменением или когда вы сохраните состояние.</li>`;
+  } catch (e) { toast(e.message); }
+  if (!S.profile) return;
   try {
     const r = await api("/api/backups");
+    $("legacy").hidden = !r.backups.length;
     $("backups").innerHTML = r.backups.map((b) =>
       `<li><span>${esc(b.name)}</span><span class="when">${fmtDate(b.mtime)}</span>
-       <button class="btn small" data-restore="${esc(b.name)}">Восстановить</button></li>`
-    ).join("") || `<li class="meta">Копий пока нет.</li>`;
-  } catch (e) { toast(e.message); }
+       <button class="btn small" data-restore="${esc(b.name)}">Вернуть профиль</button></li>`).join("");
+  } catch (e) { /* no legacy copies */ }
 }
 
 // ---------------------------------------------------------------- actions
@@ -408,7 +437,7 @@ async function apply() {
   await run("Сохраняю", async () => {
     const r = await api("/api/apply", { order });
     setState(r.state);
-    toast(`Порядок сохранён в профиль. Старый профиль сохранён в копию ${r.backup}.`, 6000);
+    toast("Порядок сохранён. Вернуть как было можно на вкладке «Точки восстановления».", 6000);
   });
 }
 
@@ -466,7 +495,7 @@ document.addEventListener("click", (e) => {
   if (t.dataset.restore) return run("Восстанавливаю", async () => {
     setState(await api("/api/restore", { name: t.dataset.restore }));
     renderBackups();
-    toast("Профиль восстановлен. Текущее состояние перед этим тоже сохранено в копию.", 6000);
+    toast("Профиль возвращён. Состояние до этого сохранено в точке восстановления.", 6000);
   });
   const row = t.closest(".row");
   if (row) {
@@ -548,11 +577,37 @@ $("online").addEventListener("click", () => run("Спрашиваю Steam", asyn
   setState(r.state, true);
   toast(`Проверено модов из Workshop: ${r.checked}. Результат — на вкладке «Проблемы».`, 6000);
 }));
-$("backup-now").addEventListener("click", () => run("Делаю копию", async () => {
-  const r = await api("/api/backup", {});
-  toast("Копия создана: " + r.backup);
-  renderBackups();
-}));
+$("point-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  run("Сохраняю состояние", async () => {
+    await api("/api/points/save", { label: $("point-label").value });
+    $("point-label").value = "";
+    renderBackups();
+    toast("Состояние сохранено. К нему можно вернуться в любой момент.");
+  });
+});
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.act === "rollback") {
+    if (isDirty() && !confirm("Несохранённый порядок модов будет потерян. Продолжить?")) return;
+    return run("Возвращаю", async () => {
+      const r = await api("/api/points/rollback", { id: t.dataset.point });
+      setState(r.state);
+      renderBackups();
+      const x = r.result;
+      toast(`Готово: возвращено файлов ${x.returned}, убрано ${x.removed}${x.profile ? ", профиль восстановлен" : ""}. ` +
+        "Если стало хуже, отмените возврат: он тоже есть в списке точек.", 8000);
+    });
+  }
+  if (t.dataset.act === "point-delete") return run("Удаляю", async () => {
+    await api("/api/points/delete", { id: t.dataset.point });
+    renderBackups();
+  });
+  if (t.dataset.act === "ack") return run("Скрываю", async () => {
+    setState(await api("/api/points/ack", { id: t.dataset.point }), true);
+  });
+});
 
 window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 

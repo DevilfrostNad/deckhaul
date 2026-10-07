@@ -26,7 +26,7 @@
   <button role="tab" data-tab="order">Порядок <span class="count" id="c-order"></span></button>
   <button role="tab" data-tab="mods">Все моды <span class="count" id="c-mods"></span></button>
   <button role="tab" data-tab="history">Изменения <span class="count" id="c-history"></span></button>
-  <button role="tab" data-tab="backups">Копии профиля</button>
+  <button role="tab" data-tab="backups">Точки восстановления</button>
 </nav>
 
 <main>
@@ -95,11 +95,25 @@
   </section>
 
   <section id="tab-backups" class="tab" role="tabpanel" hidden>
-    <div class="filters">
-      <button id="backup-now" class="btn">Сделать копию сейчас</button>
-      <span class="hint">Копия создаётся сама перед каждым сохранением и восстановлением.</span>
+    <div class="points-wrap">
+      <h2>Сохранить рабочее состояние</h2>
+      <p class="hint">Если сейчас всё работает, сохраните это состояние. К нему можно будет вернуться, что бы вы ни меняли потом.</p>
+      <form id="point-form" class="dir-form">
+        <label class="sr" for="point-label">Название</label>
+        <input id="point-label" class="search" type="text" maxlength="120"
+               placeholder="Например: перед обновлением игры, всё работает">
+        <button class="btn primary" type="submit">Сохранить</button>
+      </form>
+      <h2>Точки восстановления</h2>
+      <p class="hint">DeckHaul создаёт точку сам перед каждым изменением: сохранением порядка, установкой мода, возвратом.
+        Возврат к точке отменяет это изменение и все более поздние: возвращает профиль и файлы модов. Сам возврат тоже можно отменить.</p>
+      <ul id="points" class="points"></ul>
+      <details id="legacy" class="done" hidden>
+        <summary>Старые копии профиля</summary>
+        <p class="hint">Копии, которые делали версии DeckHaul до 1.2. Возвращают только профиль, без файлов модов.</p>
+        <ul id="backups" class="backups"></ul>
+      </details>
     </div>
-    <ul id="backups" class="backups"></ul>
   </section>
 </main>
 

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import threading
 import time
 from typing import Dict, List, Optional
 
-from . import __version__, checks, installer, order, paths, profiles, updater
+from . import __version__, checks, installer, order, paths, profiles, restore, updater
 from .archive import ArchiveError, open_container
 from .gamelog import read_game_log
 from .history import History
@@ -49,6 +50,7 @@ class App:
         self.trash_root = os.path.join(self.state_dir, "trash")
         self.download_cache: Dict[str, installer.Candidate] = {}
         self.updater = updater.Updater(self.state_dir)
+        self.points = restore.RestoreStore(self.state_dir)
 
     # ---------------------------------------------------------------- settings
     def _load_settings(self) -> dict:
@@ -112,6 +114,8 @@ class App:
             self.log, self.rules, self.overrides, self.workshop_state, self.compat_status,
         )
         issues += self._online_issues(active)
+        if current:
+            issues += self._after_change_issue()
         if current:
             self.issues = issues
         return issues
@@ -194,11 +198,123 @@ class App:
             entries = self._entries(keys)
             if len({e.key for e in entries}) != len(entries):
                 raise UserError("В списке есть повторы")
-            backup = profiles.write_order(self.state_dir, prof, entries)
+            point = self._point("apply", self._order_summary(prof, keys))
+            profiles.write_order(self.state_dir, prof, entries, backup=False)
             self.history.note("apply", f"Новый порядок модов записан в профиль «{prof.name}» "
-                              f"({len(entries)} шт.)", backup=os.path.basename(backup))
+                              f"({len(entries)} шт.)", point=point.id)
             self.refresh()
-            return backup
+            return point.id
+
+    def _order_summary(self, prof, keys: List[str]) -> str:
+        before = [e.key for e in prof.active]
+        on = [k for k in keys if k not in before]
+        off = [k for k in before if k not in keys]
+        name = lambda k: self.by_key[k].name if k in self.by_key else k
+        parts = []
+        if on:
+            parts.append("включены " + ", ".join(name(k) for k in on[:3]) + ("…" if len(on) > 3 else ""))
+        if off:
+            parts.append("выключены " + ", ".join(name(k) for k in off[:3]) + ("…" if len(off) > 3 else ""))
+        if not parts:
+            parts.append("изменён порядок")
+        return "Порядок модов: " + "; ".join(parts)
+
+    # --------------------------------------------------------- restore points
+    def _log_snapshot(self):
+        if not self.log:
+            return [], 0.0
+        return [l.text for l in self.log.lines if l.level == "error"], self.log.mtime
+
+    def _point(self, reason: str, summary: str, kind: str = "auto", label: str = ""):
+        prof = self.profile
+        errors, mtime = self._log_snapshot()
+        return self.points.create(
+            reason=reason, summary=summary, kind=kind, label=label,
+            profile_id=prof.id if prof else None, profile_name=prof.name if prof else "",
+            profile_path=prof.sii_path if prof else None,
+            mod_dir=self.layout.active.mod_dir if self.layout and self.layout.active else "",
+            log_errors=errors, log_mtime=mtime,
+        )
+
+    def list_points(self) -> List[dict]:
+        out = []
+        for p in self.points.points():
+            d = p.public()
+            d["undo_count"] = len(self.points.plan(p.id))
+            out.append(d)
+        return out
+
+    def save_point(self, label: str) -> str:
+        with self.lock:
+            label = (label or "").strip()[:120] or "Рабочее состояние"
+            self._require_profile()
+            p = self._point("manual", "Сохранено вами", kind="manual", label=label)
+            self.history.note("point", f"Сохранена точка восстановления «{label}»", point=p.id)
+            return p.id
+
+    def delete_point(self, pid: str) -> None:
+        try:
+            self.points.delete(pid)
+        except restore.RestoreError as exc:
+            raise UserError(str(exc))
+
+    def rollback(self, pid: str) -> dict:
+        with self.lock:
+            if self.layout and paths.game_running(self.layout.game):
+                raise UserError("Игра запущена. Закройте её перед возвратом.")
+            try:
+                target = self.points.get(pid)
+            except restore.RestoreError as exc:
+                raise UserError(str(exc))
+            title = target.data.get("label") or target.data.get("summary") or pid
+            what = f"Возврат к состоянию «{title}»" if target.manual else f"Возврат к состоянию до «{title}»"
+            undo = self._point("rollback", what)
+            res = self.points.rollback(pid, undo)
+            if target.data.get("has_profile"):
+                prof = next((p for p in profiles.list_profiles(self.layout.active.path)
+                             if p.id == target.data.get("profile_id")), None) if self.layout.active else None
+                if prof is None:
+                    raise UserError("Профиль из этой точки больше не существует. Файлы модов возвращены.")
+                shutil.copy2(target.profile_copy, prof.sii_path)
+            self.history.note("rollback", f"{what}: возвращено файлов "
+                              f"{res['returned']}, убрано {res['removed']}", point=undo.id)
+            self.refresh()
+            return res
+
+    def ack_point_errors(self, pid: str) -> None:
+        with self.lock:
+            p = self.points.get(pid)
+            p.data["log_ack"] = True
+            p.save()
+            self._recheck()
+
+    def _after_change_issue(self) -> List[checks.Issue]:
+        """New errors in game.log since the last change DeckHaul made."""
+        if not self.log:
+            return []
+        for p in self.points.points():
+            d = p.data
+            if d.get("rolled_back") or d.get("kind") == "manual":
+                continue
+            if self.log.mtime <= d.get("t", 0):
+                return []          # the game has not run since this change
+            if d.get("log_ack"):
+                return []
+            before = set(d.get("log_errors", []))
+            new = [l.text for l in self.log.lines if l.level == "error" and l.text not in before]
+            if not new:
+                return []
+            title = d.get("summary") or "изменения"
+            return [checks.Issue(
+                "after_change", checks.WARNING,
+                f"После изменения «{title}» в игре появились новые ошибки: {checks.plural(len(new), 'ошибка', 'ошибки', 'ошибок')}",
+                "\n".join(new[:6]) + ("\n…" if len(new) > 6 else ""),
+                "Если игра стала работать хуже, верните состояние до этого изменения. "
+                "Если всё в порядке, скройте это предупреждение.",
+                action="rollback", extra={"point": p.id, "when": d.get("t")},
+            )]
+        return []
+
 
     # -------------------------------------------------------------- downloads
     ANALYZE_PER_CALL = 4   # big archives are unpacked; spread the work over polls
@@ -354,13 +470,16 @@ class App:
                 raise UserError("Файл изменился или пропал. Обновите список.")
             mod_dir = self.layout.active.mod_dir
             installer.compare_with_installed(cand, mod_dir, self.mods)
+            point = self._point("install", f"Установка из «{cand.name}»")
             try:
-                res = installer.install(cand, payload_ids, mod_dir, self.trash_root, remove_old, delete_download)
+                res = installer.install(cand, payload_ids, mod_dir, self.points.move_to_trash,
+                                        remove_old, delete_download)
             except (installer.InstallError, OSError) as exc:
+                restore.RestoreStore.record(point, [], summary=f"Неудачная установка из «{cand.name}»")
                 raise UserError(str(exc))
+            restore.RestoreStore.record(point, res["journal"], summary=self._install_summary(cand, payload_ids, res))
             names = ", ".join(res["installed"])
-            self.history.note("installed", f"Установлено из «{cand.name}»: {names}",
-                              trashed=res["trashed"])
+            self.history.note("installed", f"Установлено из «{cand.name}»: {names}", point=point.id)
             self.download_cache.pop(fp, None)
             self.refresh()
 
@@ -383,10 +502,25 @@ class App:
                     if paths.game_running(self.layout.game):
                         note = "Игра запущена, поэтому профиль не изменён. Включите мод после выхода из игры."
                     else:
-                        self.apply(keys)
-                        note = f"Профиль «{prof.name}» обновлён, старый сохранён в копию."
+                        # The install point already holds the old profile.
+                        profiles.write_order(self.state_dir, prof, self._entries(keys), backup=False)
+                        self.refresh()
+                        note = f"Профиль «{prof.name}» обновлён. Вернуть всё как было можно на вкладке «Точки восстановления»."
             return {"installed": res["installed"], "replaced": res["replaced"],
-                    "trashed": len(res["trashed"]), "note": note}
+                    "trashed": len(res["trashed"]), "note": note, "point": point.id}
+
+    def _install_summary(self, cand, payload_ids, res) -> str:
+        parts = []
+        for p in cand.payloads:
+            if p.id not in payload_ids:
+                continue
+            m = p.mod or {}
+            text = f"{m.get('name') or p.target} {m.get('version') or ''}".strip()
+            olds = [f"{o['version']}" for o in p.replaces if o.get("version")]
+            if olds:
+                text += " вместо " + ", ".join(olds)
+            parts.append(text)
+        return "Установлен " + "; ".join(parts) if len(parts) == 1 else "Установлены " + "; ".join(parts)
 
     def backups(self) -> List[dict]:
         prof = self._require_profile()
@@ -397,6 +531,7 @@ class App:
             prof = self._require_profile()
             if paths.game_running(self.layout.game):
                 raise UserError("Игра запущена. Закройте её перед восстановлением.")
+            self._point("restore", f"Возврат старой копии профиля {name}")
             profiles.restore_backup(self.state_dir, prof, name)
             self.history.note("restore", f"Профиль «{prof.name}» восстановлен из копии {name}")
             self.refresh()

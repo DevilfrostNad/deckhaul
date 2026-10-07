@@ -380,29 +380,37 @@ def cleanup_staging(staging_root: str, keep_ids: List[str]) -> None:
             shutil.rmtree(os.path.join(staging_root, n), ignore_errors=True)
 
 
-def install(cand: Candidate, payload_ids: List[int], mod_dir: str, trash_root: str,
+def install(cand: Candidate, payload_ids: List[int], mod_dir: str, trash,
             remove_old: bool, delete_download: bool) -> Dict[str, list]:
-    """Copy the chosen payloads into mod/. Returns installed keys and replaced keys."""
+    """Copy the chosen payloads into mod/.
+
+    trash(path) moves a file away and returns where it went. Returns installed
+    keys, replaced keys and a journal of file operations for restore points."""
     chosen = [p for p in cand.payloads if p.id in payload_ids]
     if not chosen:
         raise InstallError("Не выбрано ни одного мода")
     for p in chosen:
         if not p.installable:
             raise InstallError(f"«{p.target}» установить нельзя: " + "; ".join(p.problems))
-    installed, replaced, trashed = [], [], []
+    installed, replaced, journal = [], [], []
+
+    def away(path):
+        journal.append({"op": "moved", "src": path, "dst": trash(path)})
+
     for p in chosen:
         if remove_old:
             for old in p.replaces:
                 old_path = os.path.join(mod_dir, old["file"])
                 if os.path.exists(old_path) and old["file"].lower() != p.target.lower():
-                    trashed.append(move_to_trash(old_path, trash_root))
+                    away(old_path)
                 replaced.append({"old": old["key"], "new": os.path.splitext(p.target)[0]})
         if p.overwrite:
             cur = os.path.join(mod_dir, p.target)
             if os.path.exists(cur):
-                trashed.append(move_to_trash(cur, trash_root))
-        install_payload(p, mod_dir)
+                away(cur)
+        journal.append({"op": "added", "path": install_payload(p, mod_dir)})
         installed.append(os.path.splitext(p.target)[0])
     if delete_download and os.path.exists(cand.path):
-        trashed.append(move_to_trash(cand.path, trash_root))
-    return {"installed": installed, "replaced": replaced, "trashed": trashed}
+        away(cand.path)
+    return {"installed": installed, "replaced": replaced, "journal": journal,
+            "trashed": [j for j in journal if j["op"] == "moved"]}

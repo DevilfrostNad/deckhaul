@@ -145,9 +145,9 @@ def restore_backup(state_dir: str, profile: Profile, name: str) -> str:
     return safety
 
 
-def write_order(state_dir: str, profile: Profile, entries: List[ActiveEntry]) -> str:
-    """Write the new active_mods list. Always backs up first; saves as plain text SII,
-    which the game reads without complaint."""
+def write_order(state_dir: str, profile: Profile, entries: List[ActiveEntry], backup: bool = True) -> str:
+    """Write the new active_mods list, as plain text SII (the game reads it fine).
+    The caller may skip the backup when it keeps its own copy (restore points)."""
     if not profile.writable:
         raise SiiError(profile.note or "профиль нельзя изменить")
     with open(profile.sii_path, "rb") as fh:
@@ -158,7 +158,7 @@ def write_order(state_dir: str, profile: Profile, entries: List[ActiveEntry]) ->
     check = [ActiveEntry.parse(x).key for x in read_active_mods(new_text)]
     if check != [e.key for e in entries]:
         raise SiiError("проверка записи не прошла, профиль не изменён")
-    backup = make_backup(state_dir, profile, "before-apply")
+    backup = make_backup(state_dir, profile, "before-apply") if backup else ""
     tmp = profile.sii_path + ".deckhaul.tmp"
     with open(tmp, "w", encoding="utf-8", newline="") as fh:
         fh.write(new_text)

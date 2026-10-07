@@ -4,8 +4,11 @@
   python3 -m deckhaul check      отчёт о проблемах в терминале
   python3 -m deckhaul sort       показать предлагаемый порядок (--apply, чтобы записать)
   python3 -m deckhaul profiles   список профилей
-  python3 -m deckhaul backups    резервные копии профиля
-  python3 -m deckhaul restore N  восстановить профиль из копии N
+  python3 -m deckhaul points     точки восстановления
+  python3 -m deckhaul save-point "Название"   сохранить рабочее состояние
+  python3 -m deckhaul rollback ID             вернуть состояние до точки ID
+  python3 -m deckhaul backups    старые копии профиля (до версии 1.2)
+  python3 -m deckhaul restore N  восстановить профиль из старой копии N
   python3 -m deckhaul downloads  что из «Загрузок» можно установить
   python3 -m deckhaul install N  установить файл номер N из списка downloads
   python3 -m deckhaul folders    папки, где искать скачанные моды
@@ -41,7 +44,7 @@ def _print_issues(issues) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="deckhaul", description="Менеджер модов ETS2/ATS для Steam Deck")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update"])
+                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update", "points", "save-point", "rollback"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--game", default="ets2", choices=["ets2", "ats"])
     ap.add_argument("--data-dir", help="папка игры с profiles/ и mod/, если не нашлась сама")
@@ -99,9 +102,31 @@ def main(argv=None) -> int:
                 print("\nПравила противоречат друг другу для: " + ", ".join(cycles))
             if a.apply:
                 backup = app.apply(new)
-                print(f"\nПорядок записан. Копия старого профиля: {backup}")
+                print(f"\nПорядок записан. Вернуть как было: deckhaul rollback {backup}")
             elif new != keys:
                 print("\nЧтобы записать этот порядок, добавьте --apply")
+            return 0
+
+        if a.command == "points":
+            import time as _t
+            for p in app.list_points():
+                when = _t.strftime("%d.%m.%Y %H:%M", _t.localtime(p["t"]))
+                mark = " (уже возвращались)" if p["rolled_back"] else ""
+                title = p["label"] or p["summary"]
+                print(f"{p['id']}  {when}  {'вручную' if p['kind'] == 'manual' else 'авто  '}  {title}{mark}")
+            return 0
+
+        if a.command == "save-point":
+            print("Сохранена точка " + app.save_point(a.arg or ""))
+            return 0
+
+        if a.command == "rollback":
+            if not a.arg:
+                print("Укажите id точки из команды deckhaul points")
+                return 2
+            r = app.rollback(a.arg)
+            print(f"Готово: возвращено файлов {r['returned']}, убрано {r['removed']}"
+                  + (", профиль восстановлен." if r["profile"] else "."))
             return 0
 
         if a.command == "update":

@@ -270,6 +270,20 @@ h2:first-child { margin-top: 0; }
 .mods-table td:nth-child(2) { font-variant-numeric: tabular-nums; }
 .state-on { color: var(--ok); }
 
+/* ---------- restore points */
+.points-wrap { max-width: 980px; }
+.points { list-style: none; margin: 0 0 16px; padding: 0; }
+.points li {
+  display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 12px; align-items: center;
+  padding: 10px 4px; border-bottom: 1px solid var(--line);
+}
+.points li.muted .pt-body { color: var(--muted); }
+.pt-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 900px) {
+  .points li { grid-template-columns: 1fr; }
+  .pt-btns { justify-content: flex-start; }
+}
+
 /* ---------- update */
 .update { max-width: 900px; }
 .update .notes {

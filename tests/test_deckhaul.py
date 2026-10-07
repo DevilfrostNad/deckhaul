@@ -140,10 +140,12 @@ class EndToEnd(_FakeDeck):
         codes = {i.code for i in app.issues}
         self.assertNotIn("missing", codes)
         self.assertNotIn("order", codes)
-        backups = app.backups()
-        self.assertEqual(len(backups), 1)
+        points = app.list_points()
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]["reason"], "apply")
+        self.assertIn("выключены", points[0]["summary"])
 
-        app.restore(backups[0]["name"])
+        app.rollback(points[0]["id"])
         self.assertIn("gone_mod", [e.key for e in app.profile.active])
 
     def test_history_detects_update(self):
@@ -209,6 +211,127 @@ class CompatMarks(_FakeDeck):
         p = {c["name"]: c for c in d["items"]}["old_trailer_copy.zip"]["payloads"][0]
         self.assertFalse(p["compat"])
         self.assertTrue(p["compat_ok"])
+
+
+class RestorePoints(_FakeDeck):
+    def setUp(self):
+        super().setUp()
+        old = time.time() - 600
+        dl = os.path.join(self.home, "Downloads")
+        for n in os.listdir(dl):
+            os.utime(os.path.join(dl, n), (old, old))
+
+    def _install(self, app, name):
+        d = app.downloads()
+        while d["pending"]:
+            d = app.downloads()
+        c = {c["name"]: c for c in d["items"]}[name]
+        return app.install_download(c["id"], [p["id"] for p in c["payloads"]], True, True, True)
+
+    def test_rollback_install_restores_files_and_profile(self):
+        app = self.App()
+        app.refresh()
+        mod_dir = app.layout.active.mod_dir
+        keys_before = [e.key for e in app.profile.active]
+        files_before = sorted(os.listdir(mod_dir))
+        dl = os.path.join(self.home, "Downloads")
+
+        r = self._install(app, "real_sounds_5.1.zip")
+        self.assertIn("real_sounds_5.1.scs", os.listdir(mod_dir))
+        self.assertNotIn("real_sounds_5.1.zip", os.listdir(dl))
+        point = app.list_points()[0]
+        self.assertEqual(point["id"], r["point"])
+        self.assertIn("Real Sounds 5.1 вместо 5.0", point["summary"])
+
+        app.rollback(r["point"])
+        self.assertEqual(sorted(os.listdir(mod_dir)), files_before)       # 5.0 back, 5.1 gone
+        self.assertEqual([e.key for e in app.profile.active], keys_before)
+        self.assertIn("real_sounds_5.1.zip", os.listdir(dl))             # download is back too
+        missing = {i.mod for i in app.issues if i.code == "missing"}
+        self.assertEqual(missing, {"gone_mod"})                          # only the fixture's own
+
+        # the rollback itself can be undone
+        undo = app.list_points()[0]
+        self.assertEqual(undo["reason"], "rollback")
+        app.rollback(undo["id"])
+        self.assertIn("real_sounds_5.1.scs", os.listdir(mod_dir))
+        self.assertIn("real_sounds_5.1", [e.key for e in app.profile.active])
+
+    def test_manual_point_undoes_everything_after_it(self):
+        app = self.App()
+        app.refresh()
+        mod_dir = app.layout.active.mod_dir
+        files_before = sorted(os.listdir(mod_dir))
+        keys_before = [e.key for e in app.profile.active]
+        pid = app.save_point("Всё работает")
+        self._install(app, "real_sounds_5.1.zip")
+        self._install(app, "trailer_pack_v3.zip")
+        keys = [e.key for e in app.profile.active]
+        keys.reverse()
+        app.apply(keys)
+        res = app.rollback(pid)
+        self.assertEqual(sorted(os.listdir(mod_dir)), files_before)
+        self.assertEqual([e.key for e in app.profile.active], keys_before)
+        self.assertEqual(res["removed"], 3)
+        # the saved state stays usable: change things again and come back again
+        self._install(app, "Cool Lights 2.0.zip")
+        self.assertIn("Cool_Lights.scs", os.listdir(mod_dir))
+        app.rollback(pid)
+        self.assertEqual(sorted(os.listdir(mod_dir)), files_before)
+        self.assertEqual([e.key for e in app.profile.active], keys_before)
+
+    def test_jumping_between_points(self):
+        app = self.App()
+        app.refresh()
+        mod_dir = app.layout.active.mod_dir
+        p1 = self._install(app, "trailer_pack_v3.zip")["point"]     # before trailers
+        p2 = self._install(app, "Cool Lights 2.0.zip")["point"]     # before lights
+        app.rollback(p1)                                           # nothing installed
+        self.assertNotIn("part1.scs", os.listdir(mod_dir))
+        self.assertNotIn("Cool_Lights.scs", os.listdir(mod_dir))
+        app.rollback(p2)                                           # trailers yes, lights no
+        self.assertIn("part1.scs", os.listdir(mod_dir))
+        self.assertNotIn("Cool_Lights.scs", os.listdir(mod_dir))
+        self.assertIn("part1", [e.key for e in app.profile.active])
+        self.assertNotIn("Cool_Lights", [e.key for e in app.profile.active])
+
+    def test_errors_after_change(self):
+        app = self.App()
+        app.refresh()
+        self._install(app, "real_sounds_5.1.zip")
+        self.assertNotIn("after_change", {i.code for i in app.issues})
+        # the game runs after the install and logs a new error
+        log = os.path.join(app.layout.active.path, "game.log.txt")
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write("00:01:00.000 : <ERROR> [sound] Cannot load 'sound/truck/engine.bank'\n")
+        future = time.time() + 5
+        os.utime(log, (future, future))
+        app.refresh()
+        issue = [i for i in app.issues if i.code == "after_change"][0]
+        self.assertIn("engine.bank", issue.detail)
+        self.assertNotIn("scania.r", issue.detail)                       # old error is not "new"
+        app.ack_point_errors(issue.extra["point"])
+        self.assertNotIn("after_change", {i.code for i in app.issues})
+
+    def test_prune_keeps_manual_and_cleans_trash(self):
+        from deckhaul import restore
+        store = restore.RestoreStore(os.path.join(self.home, "st"))
+        f = os.path.join(self.home, "a.scs")
+        open(f, "w").close()
+        manual = store.create(reason="manual", summary="", profile_id=None, profile_name="",
+                              profile_path=None, mod_dir="", kind="manual", label="keep")
+        first = store.create(reason="install", summary="", profile_id=None, profile_name="",
+                             profile_path=None, mod_dir="")
+        dst = store.move_to_trash(f)
+        store.record(first, [{"op": "moved", "src": f, "dst": dst}])
+        for _ in range(restore.KEEP_AUTO):
+            time.sleep(0.001)
+            store.create(reason="apply", summary="", profile_id=None, profile_name="",
+                         profile_path=None, mod_dir="")
+        ids = [p.id for p in store.points()]
+        self.assertIn(manual.id, ids)
+        self.assertNotIn(first.id, ids)
+        self.assertFalse(os.path.exists(dst))
 
 
 class Downloads(_FakeDeck):

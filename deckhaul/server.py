@@ -67,6 +67,8 @@ def _make_handler(app: App, port: int, state: dict):
                     return self._send(404, b"", "text/plain")
                 data, mime = res
                 return self._send(200, data, mime, {"Cache-Control": "max-age=3600"})
+            if url.path == "/api/points":
+                return self._safe(lambda b: {"points": app.list_points()}, {})
             if url.path == "/api/backups":
                 return self._safe(lambda b: {"backups": app.backups()}, {})
             if url.path == "/api/downloads":
@@ -110,13 +112,16 @@ def _make_handler(app: App, port: int, state: dict):
                 "/api/profile": lambda b: (app.select_profile(b["id"]), app.snapshot())[1],
                 "/api/preview": lambda b: {"issues": [i.to_dict() for i in app.preview(b["order"])]},
                 "/api/autosort": self._autosort,
-                "/api/apply": lambda b: {"backup": os.path.basename(app.apply(b["order"])),
+                "/api/apply": lambda b: {"point": app.apply(b["order"]),
                                          "state": app.snapshot()},
                 "/api/compat-ok": lambda b: (app.set_compat_ok(b["key"], bool(b.get("ok", True))), app.snapshot())[1],
                 "/api/override": lambda b: (app.set_override(b["key"], b.get("group")), app.snapshot())[1],
                 "/api/rule": lambda b: (app.add_rule(b["above"], b["below"]), app.snapshot())[1],
                 "/api/rule/delete": lambda b: (app.delete_rule(b["id"]), app.snapshot())[1],
-                "/api/backup": lambda b: {"backup": app.backup_now()},
+                "/api/points/save": lambda b: {"id": app.save_point(b.get("label", "")), "points": app.list_points()},
+                "/api/points/rollback": lambda b: {"result": app.rollback(b["id"]), "state": app.snapshot()},
+                "/api/points/delete": lambda b: (app.delete_point(b["id"]), {"points": app.list_points()})[1],
+                "/api/points/ack": lambda b: (app.ack_point_errors(b["id"]), app.snapshot())[1],
                 "/api/restore": lambda b: (app.restore(b["name"]), app.snapshot())[1],
                 "/api/online": lambda b: {"checked": app.online_check(), "state": app.snapshot()},
                 "/api/downloads/install": lambda b: app.install_download(
