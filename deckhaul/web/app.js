@@ -164,6 +164,7 @@ function issueActions(i) {
   const out = [];
   if (i.action === "remove_missing") out.push(`<button class="btn small" data-act="remove" data-key="${esc(i.mod)}">Убрать из списка</button>`);
   if (i.action === "dedupe") out.push(`<button class="btn small" data-act="dedupe">Убрать повтор</button>`);
+  if (i.action === "compat_ok") out.push(`<button class="btn small" data-act="compat-ok" data-key="${esc(i.mod)}">Работает, не предупреждать</button>`);
   if (i.action === "autosort") out.push(`<button class="btn small" data-act="autosort">Упорядочить</button>`);
   if (i.code === "conflict") out.push(`<button class="btn small" data-act="conflicts" data-key="${esc(i.mod)}">Какие файлы</button>`);
   if (i.mod && byKey[i.mod] && !byKey[i.mod].missing) out.push(`<button class="btn small" data-act="show" data-key="${esc(i.mod)}">Показать мод</button>`);
@@ -272,7 +273,10 @@ function renderDetails() {
     el.innerHTML = `<p class="hint" style="margin:0">Выберите мод в списке, чтобы увидеть подробности, сменить его группу или задать правило порядка.</p>`;
     return;
   }
-  const comp = m.compat === false ? `не для версии ${esc(S.game_version)}` : m.compat ? "совместим" : "автор не указал";
+  const comp = m.compat === false
+    ? (m.compat_ok ? `✓ проверен вами на ${esc(S.game_version)} (автор указал ${esc(m.compatible.join(", "))})`
+                   : `автор указал ${esc(m.compatible.join(", "))}, у вас ${esc(S.game_version)}`)
+    : m.compat ? "совместим" : "автор не указал";
   const issues = preview.filter((i) => i.mod === m.key);
   const groupOpts = [`<option value="">Автоматически</option>`].concat(
     S.groups.map((g) => `<option value="${g.id}" ${m.override === g.id ? "selected" : ""}>${esc(g.title)}</option>`)).join("");
@@ -293,6 +297,9 @@ function renderDetails() {
     <label>Группа в порядке<select id="d-group">${groupOpts}</select></label>
     ${others.length ? `<label>Всегда ставить выше мода<select id="d-rule"><option value="">Выберите мод</option>${others.map((k) => `<option value="${esc(k)}">${esc(byKey[k].name)}</option>`).join("")}</select></label>` : ""}`}
     <div class="btns">
+      ${m.compat === false && !m.missing ? (m.compat_ok
+        ? `<button class="btn small" data-act="compat-undo" data-key="${esc(m.key)}">Снять отметку «работает»</button>`
+        : `<button class="btn small" data-act="compat-ok" data-key="${esc(m.key)}">Работает, не предупреждать</button>`) : ""}
       ${order.includes(m.key) && !m.missing ? `<button class="btn small" data-act="conflicts" data-key="${esc(m.key)}">Пересечения файлов</button>` : ""}
       ${m.workshop_id ? `<a class="btn small" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="https://steamcommunity.com/sharedfiles/filedetails/?id=${Number(m.workshop_id)}">Страница в Workshop</a>` : ""}
     </div>`;
@@ -332,7 +339,7 @@ function renderMods() {
       <td><div>${esc(m.name)} ${problem.has(m.key) ? `<span class="flag-warning">▲</span>` : ""}</div><div class="meta">${esc(m.author || "")}</div></td>
       <td>${esc(m.version || "—")}</td>
       <td>${esc(CATEGORY[m.category] || m.category)}</td>
-      <td>${m.compat === false ? `<span class="flag-error">✖ не для ${esc(S.game_version)}</span>` : m.compat ? "✓ да" : "не указана"}</td>
+      <td>${m.compat === false ? (m.compat_ok ? "✓ проверен вами" : `<span class="flag-warning">▲ для ${esc(m.compatible.join(", "))}</span>`) : m.compat ? "✓ да" : "не указана"}</td>
       <td>${m.source === "workshop" ? "Workshop" : "папка mod"}${on.has(m.key) ? ` · <span class="state-on">включён</span>` : ""}</td>
     </tr>`).join("") || `<tr><td colspan="5" class="empty">Ничего не нашлось</td></tr>`;
 }
@@ -446,6 +453,14 @@ document.addEventListener("click", (e) => {
   if (t.dataset.act === "dedupe") { order = [...new Set(order)]; changed(); showTab("order"); return; }
   if (t.dataset.act === "autosort") { showTab("order"); return autosort(); }
   if (t.dataset.act === "conflicts") return showConflicts(t.dataset.key);
+  if (t.dataset.act === "compat-ok" || t.dataset.act === "compat-undo") {
+    const ok = t.dataset.act === "compat-ok";
+    return run("Сохраняю", async () => {
+      setState(await api("/api/compat-ok", { key: t.dataset.key, ok }), true);
+      toast(ok ? "Запомнил. Предупреждение вернётся, если обновится игра или сам мод."
+               : "Отметка снята, предупреждение снова показывается.");
+    });
+  }
   if (t.dataset.act === "show") return showMod(t.dataset.key);
   if (t.dataset.on) return enable(t.dataset.on);
   if (t.dataset.restore) return run("Восстанавливаю", async () => {
@@ -625,7 +640,8 @@ async function loadDownloads(render) {
 function payloadHtml(c, p) {
   const m = p.mod || {};
   const compat = p.compat === false
-    ? `<span class="flag-error">✖ не для версии ${esc(S.game_version)}</span>`
+    ? (p.compat_ok ? `✓ вы отметили, что он работает на ${esc(S.game_version)}`
+                   : `<span class="flag-warning">▲ автор указал ${esc((m.compatible || []).join(", "))}, у вас ${esc(S.game_version)}</span>`)
     : p.compat ? "✓ подходит к вашей версии игры" : "совместимость не указана";
   const lines = [];
   for (const r of p.replaces) lines.push(`Обновит «${esc(r.name)}» ${esc(r.version || "")} (${esc(r.file)})`);
@@ -634,7 +650,7 @@ function payloadHtml(c, p) {
   for (const pr of p.problems) lines.push(`<span class="flag-error">✖ ${esc(pr)}</span>`);
   const id = `pl-${c.id}-${p.id}`;
   return `<label class="payload" for="${id}">
-    <input type="checkbox" id="${id}" data-payload="${p.id}" ${!p.installable ? "disabled" : p.compat === false ? "" : "checked"}>
+    <input type="checkbox" id="${id}" data-payload="${p.id}" ${!p.installable ? "disabled" : p.compat === false && !p.compat_ok ? "" : "checked"}>
     <span style="min-width:0">
       <span class="name">${esc(m.name || p.target)}</span> <span class="meta">${esc(m.version ? "v" + m.version : "")} · ${esc(p.target)}</span>
       <div class="meta">${compat}${p.notes.length ? " · " + esc(p.notes.join(", ")) : ""}</div>

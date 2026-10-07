@@ -159,6 +159,58 @@ class EndToEnd(_FakeDeck):
         self.assertIn(("updated", "5.1"), kinds)
 
 
+class CompatMarks(_FakeDeck):
+    def _incompat(self, app):
+        return [i for i in app.issues if i.code == "incompatible" and i.mod == "old_trailer"]
+
+    def test_mark_and_reset(self):
+        app = self.App()
+        app.refresh()
+        issue = self._incompat(app)[0]
+        self.assertEqual(issue.severity, "warning")          # not an error any more
+        self.assertEqual(issue.action, "compat_ok")
+
+        app.set_compat_ok("old_trailer", True)
+        self.assertEqual(self._incompat(app), [])
+        again = self.App()
+        again.refresh()
+        self.assertEqual(self._incompat(again), [])
+
+        # the game updates: the warning comes back and remembers the old mark
+        log = os.path.join(app.layout.active.path, "game.log.txt")
+        with open(log, encoding="utf-8") as fh:
+            text = fh.read().replace("ver.1.53.3.14s", "ver.1.54.0.5s")
+        with open(log, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        app.refresh()
+        issue = self._incompat(app)[0]
+        self.assertIn("1.53.3", issue.detail)
+
+        app.set_compat_ok("old_trailer", True)
+        self.assertEqual(self._incompat(app), [])
+        app.set_compat_ok("old_trailer", False)
+        self.assertEqual(len(self._incompat(app)), 1)
+
+    def test_installer_sees_mark(self):
+        app = self.App()
+        app.refresh()
+        app.set_compat_ok("old_trailer", True)
+        from fixture import make_zip, manifest
+        dl = os.path.join(self.home, "Downloads")
+        make_zip(os.path.join(dl, "old_trailer_copy.zip"), {
+            "manifest.sii": manifest("Old Trailer", "0.9", cats=("trailer",), compat=("1.49.*",)),
+            "def/vehicle/trailer/old/data.sii": "SiiNunit { }",
+        })
+        old = time.time() - 600
+        os.utime(os.path.join(dl, "old_trailer_copy.zip"), (old, old))
+        d = app.downloads()
+        while d["pending"]:
+            d = app.downloads()
+        p = {c["name"]: c for c in d["items"]}["old_trailer_copy.zip"]["payloads"][0]
+        self.assertFalse(p["compat"])
+        self.assertTrue(p["compat_ok"])
+
+
 class Downloads(_FakeDeck):
     def setUp(self):
         super().setUp()

@@ -108,7 +108,7 @@ class App:
             active = self.profile.active if self.profile else []
         issues = checks.check_all(
             self.layout, self.mods, self.junk, active, self.game_version, self.full_version,
-            self.log, self.rules, self.overrides, self.workshop_state,
+            self.log, self.rules, self.overrides, self.workshop_state, self.compat_status,
         )
         issues += self._online_issues(active)
         if current:
@@ -306,6 +306,9 @@ class App:
                             sii_version_matches(self.game_version, comp)
                             or bool(self.full_version and sii_version_matches(self.full_version, comp))
                         )
+                        mod = p.get("mod") or {}
+                        p["compat_ok"] = p["compat"] is False and self._compat_mark_for(
+                            mod.get("name", ""), mod.get("author", ""), mod.get("version", ""))
                     d["already"] = bool(d["payloads"]) and all(p["already"] for p in d["payloads"])
                     items.append(d)
             installer.cleanup_staging(self.staging_root, keep)
@@ -400,6 +403,48 @@ class App:
     def backup_now(self) -> str:
         prof = self._require_profile()
         return os.path.basename(profiles.make_backup(self.state_dir, prof, "manual"))
+
+    # ------------------------------------------------- confirmed compatibility
+    @property
+    def _compat_marks(self) -> Dict[str, dict]:
+        return self.settings.setdefault("compat_ok", {})
+
+    def compat_status(self, mod: Mod):
+        """(confirmed for this game and mod version, game version of an outdated mark)."""
+        mark = self._compat_marks.get(mod.key)
+        if not mark:
+            return False, None
+        if mark.get("game") == self.game_version and mark.get("version") == mod.version:
+            return True, None
+        return False, mark.get("game")
+
+    def _compat_mark_for(self, name: str, author: str, version: str) -> bool:
+        """Same check for a file that is not installed yet, matched by its manifest."""
+        for mark in self._compat_marks.values():
+            if (mark.get("name", "").lower() == (name or "").lower()
+                    and mark.get("author", "").lower() == (author or "").lower()
+                    and mark.get("version") == version and mark.get("game") == self.game_version):
+                return True
+        return False
+
+    def set_compat_ok(self, key: str, ok: bool) -> None:
+        with self.lock:
+            m = self.by_key.get(key)
+            if m is None:
+                raise UserError("Мод не найден")
+            if ok:
+                if not self.game_version:
+                    raise UserError("Версия игры неизвестна. Запустите игру и нажмите «Обновить».")
+                self._compat_marks[key] = {
+                    "game": self.game_version, "version": m.version, "name": m.name,
+                    "author": m.author, "t": time.time(),
+                }
+                self.history.note("compat_ok", f"«{m.name}» {m.version} отмечен как рабочий на "
+                                  f"версии игры {self.game_version}", key=key)
+            else:
+                self._compat_marks.pop(key, None)
+            self._save_settings()
+            self._recheck()
 
     # --------------------------------------------------------- groups & rules
     def set_override(self, key: str, group: Optional[str]) -> None:
@@ -519,6 +564,7 @@ class App:
                 d["group"] = order.group_of(m, rules, self.overrides)
                 d["override"] = self.overrides.get(m.key)
                 d["compat"] = m.compatible_with(self.game_version, self.full_version)
+                d["compat_ok"], d["compat_ok_before"] = self.compat_status(m)
                 mods.append(d)
             for k in active_keys:
                 if k not in self.by_key:

@@ -60,7 +60,10 @@ def check_all(
     rules,
     overrides: Dict[str, str],
     workshop_state: Dict[int, dict],
+    compat_ok=None,
 ) -> List[Issue]:
+    """compat_ok(mod) -> (confirmed_now, previously_confirmed_for) for mods the user
+    marked as working although the manifest says otherwise."""
     issues: List[Issue] = []
     by_key: Dict[str, Mod] = {}
     for m in mods:
@@ -109,15 +112,21 @@ def check_all(
             issues.append(Issue(code, sev, f"«{m.name}»: {text}", fix=_FIXES.get(code, ""), mod=m.key))
         comp = m.compatible_with(game_version, full_version)
         if comp is False:
-            issues.append(Issue(
-                "incompatible", ERROR if is_active else INFO,
-                f"«{m.name}» не рассчитан на версию игры {game_version}",
-                "Автор указал совместимость: " + ", ".join(m.compatible) +
-                ". Устаревшие моды — частая причина вылетов после обновления игры.",
-                "Обновите мод. Если обновления нет, отключите его или проверьте в игре на "
-                "отдельном профиле." if is_active else "",
-                mod=m.key,
-            ))
+            confirmed, before = compat_ok(m) if compat_ok else (False, None)
+            if not confirmed:
+                detail = ("Автор указал совместимость: " + ", ".join(m.compatible) + ". "
+                          "Часто мод работает и на новой версии, просто автор не обновил описание. "
+                          "Сломаться после обновления игры чаще могут грузовики, прицепы и карты.")
+                if before:
+                    detail += f" Вы отмечали, что мод работает на {before}; после обновления проверьте снова."
+                issues.append(Issue(
+                    "incompatible", WARNING if is_active else INFO,
+                    f"«{m.name}» рассчитан на другую версию игры",
+                    detail,
+                    "Проверьте мод в игре. Если всё работает, нажмите «Работает, не предупреждать». "
+                    "Если нет, обновите или отключите его." if is_active else "",
+                    mod=m.key, action="compat_ok",
+                ))
         if is_active and not m.has_manifest and m.source == "local" and not m.scan_problems:
             issues.append(Issue(
                 "no_manifest", INFO, f"«{m.name}»: нет manifest.sii",

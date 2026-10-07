@@ -109,6 +109,7 @@ def _make_handler(app: App, port: int, state: dict):
                 "/api/autosort": self._autosort,
                 "/api/apply": lambda b: {"backup": os.path.basename(app.apply(b["order"])),
                                          "state": app.snapshot()},
+                "/api/compat-ok": lambda b: (app.set_compat_ok(b["key"], bool(b.get("ok", True))), app.snapshot())[1],
                 "/api/override": lambda b: (app.set_override(b["key"], b.get("group")), app.snapshot())[1],
                 "/api/rule": lambda b: (app.add_rule(b["above"], b["below"]), app.snapshot())[1],
                 "/api/rule/delete": lambda b: (app.delete_rule(b["id"]), app.snapshot())[1],
