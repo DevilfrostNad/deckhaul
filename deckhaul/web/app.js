@@ -719,6 +719,12 @@ document.addEventListener("submit", (e) => {
     toast(f.elements.url.value ? "Ссылка сохранена. Когда мод устареет, DeckHaul напомнит, где брать обновление." : "Ссылка убрана.");
   });
 });
+$("report").addEventListener("click", () => run("Собираю отчёт", async () => {
+  const r = await api("/api/report", {});
+  $("report-path").hidden = false;
+  $("report-path").textContent = `Отчёт сохранён: ${r.path}. Приложите этот файл к сообщению о проблеме.`;
+  toast("Отчёт сохранён в «Загрузки»", 5000);
+}));
 $("point-form").addEventListener("submit", (e) => {
   e.preventDefault();
   run("Сохраняю состояние", async () => {

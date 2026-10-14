@@ -13,6 +13,7 @@
   python3 -m deckhaul install N  установить файл номер N из списка downloads
   python3 -m deckhaul folders    папки, где искать скачанные моды
   python3 -m deckhaul update     проверить новую версию DeckHaul и установить её
+  python3 -m deckhaul report     сохранить отчёт о проблеме в «Загрузки»
   python3 -m deckhaul folder-add ПУТЬ / folder-remove ПУТЬ
 """
 
@@ -44,7 +45,7 @@ def _print_issues(issues) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="deckhaul", description="Менеджер модов ETS2/ATS для Steam Deck")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update", "points", "save-point", "rollback"])
+                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update", "points", "save-point", "rollback", "report"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--game", default="ets2", choices=["ets2", "ats"])
     ap.add_argument("--data-dir", help="папка игры с profiles/ и mod/, если не нашлась сама")
@@ -107,6 +108,11 @@ def main(argv=None) -> int:
                 print(f"\nПорядок записан. Вернуть как было: deckhaul rollback {backup}")
             elif new != keys:
                 print("\nЧтобы записать этот порядок, добавьте --apply")
+            return 0
+
+        if a.command == "report":
+            print("Отчёт сохранён: " + app.save_report())
+            print("Отправьте его разработчику или приложите к обсуждению на GitHub.")
             return 0
 
         if a.command == "points":

@@ -891,6 +891,14 @@ class App:
         )
         return {"mod": me.name, "total": len(me.hashes), "lost": len(rows), "rows": rows[:limit]}
 
+    # ----------------------------------------------------------------- report
+    def save_report(self) -> str:
+        from . import report
+        path = report.save(self, installer.downloads_dir())
+        self.history.note("report", "Сохранён отчёт о проблеме: " + os.path.basename(path))
+        home = os.path.expanduser("~")
+        return path.replace(home, "~", 1) if path.startswith(home) else path
+
     # ----------------------------------------------------------------- update
     @property
     def auto_update_check(self) -> bool:

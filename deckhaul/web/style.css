@@ -301,6 +301,9 @@ a { color: var(--accent); }
 .ws-item img, .ws-item .thumb { width: 96px; height: 54px; object-fit: cover; border-radius: 4px; background: var(--surface-2); }
 @media (max-width: 900px) { .ws-item { grid-template-columns: 1fr; } }
 
+.report { max-width: 900px; margin-top: 32px; }
+.report .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+
 /* ---------- update */
 .update { max-width: 900px; }
 .update .notes {

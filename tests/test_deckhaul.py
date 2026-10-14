@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import sys
@@ -190,6 +191,31 @@ class StrangeMods(unittest.TestCase):
         m2 = fast.inspect(Mod(key="ok", source="local", path=p))     # the worker is reused
         fast.close()
         self.assertEqual((m.name, m.scan_problems, m2.name), ("Fine Mod", [], "Fine Mod"))
+
+
+class Report(_FakeDeck):
+    def test_report_has_no_private_data(self):
+        import zipfile
+        app = self.App()
+        app.refresh()
+        app.set_steam_key("0123456789abcdef0123456789ABCDEF")
+        app.set_mod_source("real_sounds", "https://example.com/secret-page")
+        path = app.save_report()
+        self.assertTrue(path.startswith("~/Downloads/deckhaul-report-"))
+        full = os.path.join(self.home, path[2:])
+        with zipfile.ZipFile(full) as z:
+            names = set(z.namelist())
+            blob = "".join(z.read(n).decode("utf-8", "replace") for n in names)
+        self.assertTrue({"report.json", "unreadable_archives.json", "README.txt"} <= names)
+        for secret in ("0123456789", "secret-page", "Тест", "Deck Logistics", self.home):
+            self.assertNotIn(secret, blob)
+        info = json.loads(zipfile.ZipFile(full).read("report.json"))
+        self.assertEqual(info["game_version"], "1.53.3.14s")
+        broken = json.loads(zipfile.ZipFile(full).read("unreadable_archives.json"))
+        self.assertIn("broken.scs", {a["file"] for a in broken})
+        # the report in Downloads is not offered as a mod to install
+        d = app.downloads()
+        self.assertNotIn(os.path.basename(full), {c["name"] for c in d["items"]} | set(d["busy"]))
 
 
 class EndToEnd(_FakeDeck):

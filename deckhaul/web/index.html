@@ -94,6 +94,18 @@
       <span id="ws-status" class="hint" style="margin:0"></span>
     </div>
     <ul id="events" class="events"></ul>
+    <div class="report">
+      <h2>Если что-то работает не так</h2>
+      <p class="hint">Отчёт поможет разработчику найти причину. В нём версии программ, список модов с найденными
+        проблемами, устройство архивов, которые DeckHaul не смог прочитать, и журналы запуска.
+        Профилей, сохранений, названий профилей и ключа Steam в нём нет.</p>
+      <div class="btns">
+        <button id="report" class="btn">Сохранить отчёт о проблеме</button>
+        <a class="btn" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener"
+           href="https://github.com/DevilfrostNad/deckhaul/issues/new">Написать на GitHub</a>
+      </div>
+      <p id="report-path" class="meta" hidden></p>
+    </div>
   </section>
 
   <section id="tab-backups" class="tab" role="tabpanel" hidden>

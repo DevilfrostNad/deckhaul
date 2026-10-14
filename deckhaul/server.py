@@ -139,6 +139,7 @@ def _make_handler(app: App, port: int, state: dict):
                 "/api/downloads/dirs/add": lambda b: (app.add_download_dir(b["path"]), app.downloads())[1],
                 "/api/downloads/dirs/remove": lambda b: (app.remove_download_dir(b["path"]), app.downloads())[1],
                 "/api/update/check": lambda b: app.update_status(force=True),
+                "/api/report": lambda b: {"path": app.save_report()},
                 "/api/update/auto": lambda b: (app.set_auto_update_check(bool(b.get("on"))), app.update_status())[1],
                 "/api/update/apply": self._apply_update,
                 "/api/game-version": lambda b: (app.set_game_version(b.get("version")), app.snapshot())[1],

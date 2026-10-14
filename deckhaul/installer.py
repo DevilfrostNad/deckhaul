@@ -138,7 +138,7 @@ def list_downloads(folder: str) -> List[dict]:
     partial_stems = {os.path.splitext(n)[0] for n in names if n.lower().endswith(PARTIAL_EXTS)}
     for n in names:
         low = n.lower()
-        if not low.endswith(ARCHIVE_EXTS) or n.startswith("."):
+        if not low.endswith(ARCHIVE_EXTS) or n.startswith(".") or low.startswith("deckhaul-report-"):
             continue
         p = os.path.join(folder, n)
         try:
