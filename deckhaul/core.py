@@ -149,6 +149,7 @@ class App:
             self.profiles[0] if self.profiles else None
         )
         self._apply_online_titles()
+        self._remember_buildid()
         self.new_events = self.history.update(self.mods, self.full_version or self.game_version)
         self._recheck()
         self.scanned_at = time.time()
@@ -890,6 +891,20 @@ class App:
             key=lambda r: r["file"],
         )
         return {"mod": me.name, "total": len(me.hashes), "lost": len(rows), "rows": rows[:limit]}
+
+    # -------------------------------------------------------- prelaunch check
+    def _remember_buildid(self) -> None:
+        from .prelaunch import game_buildid
+        bid = game_buildid(self.layout) if self.layout else None
+        if bid and self.settings.get("seen_buildid") != bid:
+            self.settings["seen_buildid"] = bid
+            self._save_settings()
+
+    def prelaunch_status(self) -> dict:
+        from . import prelaunch
+        app_id = self.layout.game.app_id if self.layout else paths.GAMES[self.game].app_id
+        return {"option": prelaunch.launch_option(), "configured": prelaunch.configured(app_id),
+                "problems": prelaunch.quick_check(self.game, self.state_dir) if self.layout else []}
 
     # ----------------------------------------------------------------- report
     def save_report(self) -> str:

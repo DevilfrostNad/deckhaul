@@ -218,6 +218,81 @@ class Report(_FakeDeck):
         self.assertNotIn(os.path.basename(full), {c["name"] for c in d["items"]} | set(d["busy"]))
 
 
+class Prelaunch(_FakeDeck):
+    def _acf(self, buildid):
+        apps = os.path.join(self.home, ".local/share/Steam/steamapps")
+        with open(os.path.join(apps, "appmanifest_227300.acf"), "w") as fh:
+            fh.write('"AppState"\n{\n"appid" "227300"\n"buildid" "%s"\n}\n' % buildid)
+
+    def test_quick_check_finds_problems(self):
+        from deckhaul import prelaunch
+        app = self.App()
+        app.refresh()                          # fills the scan cache, like a normal DeckHaul run
+        problems = prelaunch.quick_check()
+        text = " ".join(problems)
+        self.assertIn("Удалённый мод", text)  # missing
+        self.assertIn("Old Trailer", text)     # made for 1.49
+        app.set_compat_ok("old_trailer", True)
+        self.assertNotIn("Old Trailer", " ".join(prelaunch.quick_check()))
+
+    def test_game_update_detected(self):
+        from deckhaul import prelaunch
+        self._acf("100")
+        app = self.App()
+        app.refresh()
+        self.assertFalse(any("обновил" in p for p in prelaunch.quick_check()))
+        self._acf("101")
+        self.assertTrue(any("обновил" in p for p in prelaunch.quick_check()))
+        app.refresh()                          # DeckHaul has seen the new build
+        self.assertFalse(any("обновил" in p for p in prelaunch.quick_check()))
+
+    def _run_main(self, check):
+        from deckhaul import prelaunch
+        calls = []
+        orig_exec, orig_check, orig_ask = os.execvp, prelaunch.quick_check, prelaunch._ask
+        os.execvp = lambda f, args: calls.append(args)
+        prelaunch.quick_check = check
+        prelaunch._ask = lambda problems: "play"
+        try:
+            prelaunch.main(["/game/eurotrucks2", "-nointro"])
+        finally:
+            os.execvp, prelaunch.quick_check, prelaunch._ask = orig_exec, orig_check, orig_ask
+        return calls
+
+    def test_game_always_starts(self):
+        self.assertEqual(self._run_main(lambda: []), [["/game/eurotrucks2", "-nointro"]])
+        self.assertEqual(self._run_main(lambda: ["x"]), [["/game/eurotrucks2", "-nointro"]])
+
+        def broken():
+            raise RuntimeError("boom")
+        self.assertEqual(self._run_main(broken), [["/game/eurotrucks2", "-nointro"]])
+
+    def test_cli_passes_game_args_untouched(self):
+        from deckhaul import __main__ as cli, prelaunch
+        seen = []
+        orig = prelaunch.main
+        prelaunch.main = lambda cmd: seen.append(cmd) or 0
+        try:
+            cli.main(["prelaunch", "/game/eurotrucks2", "--help", "-x"])
+        finally:
+            prelaunch.main = orig
+        self.assertEqual(seen, [["/game/eurotrucks2", "--help", "-x"]])
+
+    def test_configured_detection(self):
+        from deckhaul import prelaunch
+        cfg = os.path.join(self.home, ".local/share/Steam/userdata/123/config")
+        os.makedirs(cfg)
+        path = os.path.join(cfg, "localconfig.vdf")
+        def write(opts):
+            with open(path, "w") as fh:
+                fh.write('"UserLocalConfigStore"\n{\n"Software"\n{\n"Valve"\n{\n"Steam"\n{\n"apps"\n{\n'
+                         '"227300"\n{\n"LaunchOptions" "%s"\n}\n}\n}\n}\n}\n}\n' % opts)
+        write("-nointro")
+        self.assertFalse(prelaunch.configured(227300))
+        write('\\"/home/deck/.local/bin/deckhaul\\" prelaunch %command%')
+        self.assertTrue(prelaunch.configured(227300))
+
+
 class EndToEnd(_FakeDeck):
 
     def test_full_flow(self):

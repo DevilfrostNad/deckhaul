@@ -94,6 +94,21 @@
       <span id="ws-status" class="hint" style="margin:0"></span>
     </div>
     <ul id="events" class="events"></ul>
+    <div class="report" id="prelaunch">
+      <h2>Проверка перед запуском игры</h2>
+      <p class="hint">DeckHaul может проверять моды за секунду до старта ETS2: на месте ли включённые моды,
+        подходят ли они к версии игры, не обновил ли Steam игру. Если всё в порядке, игра просто запустится.
+        Если нет, появится окно с выбором: запустить игру или открыть DeckHaul.</p>
+      <p id="pl-status" class="meta"></p>
+      <ol class="steps">
+        <li>В Steam откройте свойства Euro Truck Simulator 2: шестерёнка → «Свойства».</li>
+        <li>В поле «Параметры запуска» вставьте строку ниже. Если там уже что-то есть, добавьте её в начало.</li>
+      </ol>
+      <div class="dir-form">
+        <input id="pl-option" class="search" type="text" readonly aria-label="Строка для параметров запуска">
+        <button id="pl-copy" class="btn small" type="button">Скопировать</button>
+      </div>
+    </div>
     <div class="report">
       <h2>Если что-то работает не так</h2>
       <p class="hint">Отчёт поможет разработчику найти причину. В нём версии программ, список модов с найденными

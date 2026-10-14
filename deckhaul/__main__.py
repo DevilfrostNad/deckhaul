@@ -43,6 +43,11 @@ def _print_issues(issues) -> None:
 
 
 def main(argv=None) -> int:
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args[:1] == ["prelaunch"]:
+        # Steam passes the game command after it; argparse must not touch it.
+        from .prelaunch import main as prelaunch_main
+        return prelaunch_main(args[1:])
     ap = argparse.ArgumentParser(prog="deckhaul", description="Менеджер модов ETS2/ATS для Steam Deck")
     ap.add_argument("command", nargs="?", default="serve",
                     choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update", "points", "save-point", "rollback", "report"])

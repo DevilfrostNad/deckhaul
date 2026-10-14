@@ -78,6 +78,8 @@ def _make_handler(app: App, port: int, state: dict):
                 return self._safe(lambda b: app.browse(path or None), {})
             if url.path == "/api/workshop/auto":
                 return self._safe(lambda b: app.workshop_auto(), {})
+            if url.path == "/api/prelaunch":
+                return self._safe(lambda b: app.prelaunch_status(), {})
             if url.path == "/api/update":
                 return self._safe(lambda b: app.update_status(), {})
             if url.path == "/api/conflicts":

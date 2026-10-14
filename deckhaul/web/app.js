@@ -504,6 +504,7 @@ function showTab(name) {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
   document.querySelectorAll(".tab").forEach((t) => (t.hidden = t.id !== "tab-" + name));
   if (name === "backups") renderBackups();
+  if (name === "history") loadPrelaunch();
   if (name === "install") loadDownloads(true);
 }
 
@@ -718,6 +719,26 @@ document.addEventListener("submit", (e) => {
     setState(await api("/api/source", { key: f.dataset.key, url: f.elements.url.value }), true);
     toast(f.elements.url.value ? "Ссылка сохранена. Когда мод устареет, DeckHaul напомнит, где брать обновление." : "Ссылка убрана.");
   });
+});
+async function loadPrelaunch() {
+  try {
+    const r = await api("/api/prelaunch");
+    $("pl-option").value = r.option;
+    $("pl-status").innerHTML = r.configured === true
+      ? `<span class="state-on">✓ Проверка включена в Steam.</span>` +
+        (r.problems.length ? ` Сейчас при запуске она покажет: ${esc(r.problems.join(" "))}` : " Сейчас проблем не найдено.")
+      : r.configured === false ? "Пока не включена." : "Не удалось прочитать настройки Steam, проверить нельзя.";
+  } catch (e) { /* not critical */ }
+}
+$("pl-copy").addEventListener("click", async () => {
+  const input = $("pl-option");
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch (e) {
+    input.select();
+    document.execCommand("copy");
+  }
+  toast("Строка скопирована. Вставьте её в параметры запуска игры в Steam.");
 });
 $("report").addEventListener("click", () => run("Собираю отчёт", async () => {
   const r = await api("/api/report", {});
