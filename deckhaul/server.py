@@ -85,6 +85,14 @@ def _make_handler(app: App, port: int, state: dict):
                 return self._safe(lambda b: app.export_set(sid), {})
             if url.path == "/api/disk":
                 return self._safe(lambda b: app.disk_usage(), {})
+            if url.path == "/api/trucky/list":
+                q = parse_qs(url.query)
+                return self._safe(lambda b: app.tm_list(q.get("kind", ["trending"])[0], q.get("value", [""])[0],
+                                                        int(q.get("page", ["1"])[0] or 1)), {})
+            if url.path == "/api/trucky/mod":
+                return self._safe(lambda b: app.tm_mod(parse_qs(url.query).get("url", [""])[0]), {})
+            if url.path == "/api/trucky/status":
+                return self._safe(lambda b: app.tm_status(), {})
             if url.path == "/api/prelaunch":
                 return self._safe(lambda b: app.prelaunch_status(), {})
             if url.path == "/api/update":
@@ -149,6 +157,9 @@ def _make_handler(app: App, port: int, state: dict):
                 "/api/downloads/dirs/remove": lambda b: (app.remove_download_dir(b["path"]), app.downloads())[1],
                 "/api/update/check": lambda b: app.update_status(force=True),
                 "/api/report": lambda b: {"path": app.save_report()},
+                "/api/trucky/download": lambda b: app.tm_download(b["url"], b.get("build_id")),
+                "/api/trucky/check": lambda b: self._tm_check(b),
+                "/api/trucky/auto": lambda b: (app.set_tm_auto(bool(b.get("on"))), app.tm_status())[1],
                 "/api/sets/save": lambda b: app.save_set(b.get("name", "")),
                 "/api/sets/apply": lambda b: {"result": app.apply_set(b["id"]), "state": app.snapshot()},
                 "/api/sets/delete": lambda b: (app.delete_set(b["id"]), {"sets": app.list_sets()})[1],
@@ -164,6 +175,15 @@ def _make_handler(app: App, port: int, state: dict):
             if fn is None:
                 return self._json({"error": "Нет такого действия"}, 404)
             self._safe(fn, body)
+
+        @staticmethod
+        def _tm_check(b):
+            # One page per mod at a polite pace: never block a request on it.
+            threading.Thread(target=app.tm_check_updates, kwargs={"force": bool(b.get("force"))},
+                             daemon=True).start()
+            st = app.tm_status()
+            st["running"] = True
+            return st
 
         @staticmethod
         def _apply_update(b):

@@ -37,6 +37,22 @@ def game_buildid(layout) -> Optional[str]:
     return None
 
 
+def installed_dlc(layout) -> Optional[set]:
+    """App ids of DLC Steam installed for the game; None when Steam does not say."""
+    for lib in layout.libraries:
+        acf = os.path.join(lib, "steamapps", f"appmanifest_{layout.game.app_id}.acf")
+        if not os.path.isfile(acf):
+            continue
+        try:
+            depots = vdf.load(acf).get("AppState", {}).get("InstalledDepots", {})
+        except OSError:
+            return None
+        ids = {int(d["dlcappid"]) for d in depots.values()
+               if isinstance(d, dict) and str(d.get("dlcappid", "")).isdigit()}
+        return ids or None
+    return None
+
+
 def _last_played_profile(data_dir: str):
     best = None
     for sub, cloud in (("profiles", False), ("steam_profiles", True)):

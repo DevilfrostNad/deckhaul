@@ -353,6 +353,110 @@ class SetsAndDisk(_FakeDeck):
         self.assertEqual(app.disk_usage()["trash"], 0)
 
 
+class TruckyParsing(unittest.TestCase):
+    def test_lists_and_mod_page(self):
+        from deckhaul import truckymods as t
+        import tm_samples
+        slug = "euro-truck-simulator-2"
+        cards = t.parse_list(tm_samples.SEARCH, slug)
+        self.assertEqual(len(cards), 1)                                 # the ATS mod is skipped
+        c = cards[0]
+        self.assertEqual((c["title"], c["category"], c["author"], c["downloads"], c["rating"]),
+                         ("Test Engine Sound", "sounds", "Sound Maker", 1234, 4.8))
+        c = t.parse_list(tm_samples.CATEGORY, slug)[0]
+        self.assertEqual((c["title"], c["author"], c["downloads"], c["rating"]), ("Test Map & More", "Map Author", 99000, 4.5))
+        url = "https://truckymods.io/euro-truck-simulator-2/maps/test-map-123"
+        d = t.parse_mod(tm_samples.MOD, url, slug)
+        self.assertEqual((d["title"], d["author"], d["version"], d["game_versions"], d["size"], d["project_id"]),
+                         ("Test Map", "Map Author", "2.1", ["1.53", "1.54"], 5000, 77))
+        self.assertFalse(d["login_required"])
+        self.assertEqual([(b["version"], b["build_id"], b["game_versions"]) for b in d["builds"]],
+                         [("2.1", 902, ["1.54"]), ("2.0", 801, ["1.53"])])
+        self.assertEqual(d["dlcs"], [{"name": "Going East!", "app_id": 227310}])
+        self.assertEqual([r["title"] for r in d["required_mods"]], ["Base Pack"])
+        self.assertEqual(t.best_build(d, "1.53.3")["build_id"], 801)  # the build for the user's game
+        self.assertEqual(t.best_build(d, "1.60.0")["build_id"], 902)  # nothing fits: the newest
+        self.assertTrue(t.is_newer("2.1", "2.0"))
+        self.assertFalse(t.is_newer("1.5", "1.5"))
+        self.assertIsNone(t.is_newer("beta", "1.0"))
+        self.assertEqual(t.page_of(url + "/download/latest"), url)
+
+    def test_client_is_polite(self):
+        from deckhaul import truckymods as t
+        import tm_samples
+        tmp = tempfile.mkdtemp()
+        calls = []
+
+        def fetch(url):
+            calls.append(url)
+            return tm_samples.SEARCH
+        try:
+            c = t.Client(os.path.join(tmp, "c.json"), fetch=fetch)
+            c.search("engine")
+            c.search("engine")                                         # cached
+            self.assertEqual(len(calls), 1)
+            self.assertIn("query=engine", calls[0])
+            with self.assertRaises(t.TruckyError):
+                c.category("../../etc")
+            with self.assertRaises(t.TruckyError):
+                c.mod("https://example.com/euro-truck-simulator-2/maps/x")
+            self.assertIn("DeckHaul/", t.USER_AGENT)
+            self.assertIn("github.com/DevilfrostNad/deckhaul", t.USER_AGENT)
+        finally:
+            shutil.rmtree(tmp)
+
+
+class TruckyFlow(_FakeDeck):
+    URL = "https://truckymods.io/euro-truck-simulator-2/maps/test-map-123"
+
+    def _app(self):
+        import tm_samples
+        app = self.App()
+        app.tm.fetch = lambda url: tm_samples.MOD
+        app.refresh()
+        return app
+
+    def test_download_is_matched_and_remembered(self):
+        app = self._app()
+        r = app.tm_download(self.URL)
+        self.assertEqual(r["open"], self.URL + "/download/801")       # official page, build for game 1.53
+        r = app.tm_download(self.URL, build_id=902)                    # the newest build, size is known
+        self.assertEqual(r["open"], self.URL + "/download/902")
+        self.assertEqual(app.settings["tm_expect"][-1]["size"], 5000)
+        # the browser saves a 5000-byte archive into Downloads
+        from fixture import make_zip, manifest
+        dl = os.path.join(self.home, "Downloads", "Test Map 2.1.zip")
+        make_zip(dl, {"manifest.sii": manifest("Test Map", "2.1", cats=("map",)), "map/x.mbd": "m"})
+        with open(dl, "ab") as fh:                                     # pad to the advertised size
+            fh.write(b"\0" * (5000 - os.path.getsize(dl)))
+        old = time.time() - 30
+        os.utime(dl, (old, old))
+        app.settings["tm_expect"][-1]["t"] = old - 10
+        d = app.downloads()
+        while d["pending"]:
+            d = app.downloads()
+        c = {c["name"]: c for c in d["items"]}["Test Map 2.1.zip"]
+        self.assertEqual(c["source"], self.URL)
+        app.install_download(c["id"], [0], True, True, True)
+        mods = {m["key"]: m for m in app.snapshot()["mods"]}
+        self.assertEqual(mods["Test_Map_2.1"]["source_url"], self.URL)
+
+    def test_update_check_and_card_marks(self):
+        app = self._app()
+        app.set_mod_source("old_trailer", self.URL)                    # pretend it came from there
+        app.tm_check_updates(force=True)
+        issue = [i for i in app.issues if i.code == "tm_update"][0]
+        self.assertEqual(issue.mod, "old_trailer")
+        self.assertEqual(issue.extra["url"], self.URL)
+        d = app.tm_mod(self.URL)
+        self.assertEqual(d["installed"]["key"], "old_trailer")
+        self.assertTrue(d["update_available"])
+        self.assertTrue(d["compat"])                                   # 1.53 is listed
+        self.assertEqual(d["best_build"], 801)
+        self.assertTrue(d["best_fits"])
+        self.assertIsNone(d["dlcs"][0]["installed"])                   # Steam did not say
+
+
 class EndToEnd(_FakeDeck):
 
     def test_full_flow(self):

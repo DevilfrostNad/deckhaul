@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Dict, List, Optional
 
-from . import __version__, checks, installer, order, paths, profiles, restore, updater
+from . import __version__, checks, installer, order, paths, profiles, restore, truckymods, updater
 from .archive import ArchiveError, open_container
 from .gamelog import read_game_log
 from .history import History
@@ -54,6 +54,9 @@ class App:
         self.download_cache: Dict[str, installer.Candidate] = {}
         self.updater = updater.Updater(self.state_dir)
         self.points = restore.RestoreStore(self.state_dir)
+        self.tm = truckymods.Client(os.path.join(self.state_dir, "truckymods_cache.json"), self.game)
+        self.tm_updates: Dict[str, dict] = {}
+        self.tm_checking = False
         self.online_path = os.path.join(self.state_dir, "workshop_online.json")
         self.online_checked = 0.0
         try:
@@ -163,6 +166,7 @@ class App:
             self.log, self.rules, self.overrides, self.workshop_state, self.compat_status,
         )
         issues += self._online_issues(active)
+        issues += self._tm_issues({e.key for e in active})
         for i in issues:
             if i.code == "incompatible" and i.mod in self.by_key:
                 m = self.by_key[i.mod]
@@ -466,6 +470,7 @@ class App:
                         budget -= 1
                         cand = installer.analyze(f["path"], self.staging_root)
                         self.download_cache[fp] = cand
+                    self._tm_match_download(cand)
                     if mod_dir:
                         installer.compare_with_installed(cand, mod_dir, self.mods)
                     d = cand.public()
@@ -891,6 +896,161 @@ class App:
             key=lambda r: r["file"],
         )
         return {"mod": me.name, "total": len(me.hashes), "lost": len(rows), "rows": rows[:limit]}
+
+    # --------------------------------------------------------------- TruckyMods
+    TM_CHECK_EVERY = 24 * 3600
+
+    def _tm_page(self, m: Mod) -> Optional[str]:
+        return truckymods.page_of(self.source_of(m)) if m.source == "local" else None
+
+    def _tm_installed(self, url: str, title: str = "") -> Optional[Mod]:
+        for m in self.mods:
+            if self._tm_page(m) == url:
+                return m
+        t = (title or "").strip().lower()
+        if t:
+            for m in self.mods:
+                if m.name.strip().lower() == t:
+                    return m
+        return None
+
+    def _tm_card(self, c: dict) -> dict:
+        m = self._tm_installed(c["url"], c.get("title", ""))
+        c = dict(c)
+        c["installed"] = m.key if m else None
+        c["update"] = bool(m and m.key in self.tm_updates)
+        return c
+
+    def tm_list(self, kind: str, value: str = "", page: int = 1) -> dict:
+        try:
+            if kind == "search":
+                if len((value or "").strip()) < 2:
+                    raise UserError("Введите хотя бы две буквы")
+                items = self.tm.search(value, page)
+            elif kind == "category":
+                items = self.tm.category(value, page)
+            else:
+                items = self.tm.trending()
+        except truckymods.TruckyError as exc:
+            raise UserError(str(exc))
+        with self.lock:
+            return {"items": [self._tm_card(c) for c in items], "page": page}
+
+    def tm_mod(self, url: str) -> dict:
+        try:
+            d = dict(self.tm.mod(url))
+        except truckymods.TruckyError as exc:
+            raise UserError(str(exc))
+        from .prelaunch import installed_dlc
+        gv = self.game_version
+        mm = ".".join(gv.split(".")[:2]) if gv else None
+        d["game_version"] = gv
+        d["compat"] = None if not (mm and d["game_versions"]) else any(
+            g == mm or g.startswith(mm + ".") for g in d["game_versions"])
+        best = truckymods.best_build(d, gv)
+        d["best_build"] = best["build_id"] if best else None
+        d["best_fits"] = bool(best and mm and any(g == mm or g.startswith(mm + ".") for g in best["game_versions"]))
+        owned = installed_dlc(self.layout) if self.layout else None
+        d["dlcs"] = [dict(x, installed=None if owned is None else x["app_id"] in owned) for x in d["dlcs"]]
+        with self.lock:
+            d["required_mods"] = [dict(r, installed=bool(self._tm_installed(r["url"], r["title"])))
+                                  for r in d["required_mods"]]
+            m = self._tm_installed(d["url"], d["title"])
+            d["installed"] = {"key": m.key, "version": m.version, "name": m.name} if m else None
+            d["update_available"] = bool(m and truckymods.is_newer(d["version"], m.version))
+        return d
+
+    def tm_download(self, url: str, build_id: Optional[int] = None) -> dict:
+        """Remember what the user is about to download, return the official page to open."""
+        d = self.tm_mod(url)
+        build = next((b for b in d["builds"] if b["build_id"] == build_id), None) if build_id else None
+        build = build or next((b for b in d["builds"] if b["build_id"] == d["best_build"]), None)
+        target = (build or {}).get("download_url") or d["download_page"]
+        latest = not d["builds"] or (build is not None and build["build_id"] == d["builds"][0]["build_id"])
+        with self.lock:
+            expect = self.settings.setdefault("tm_expect", [])
+            expect[:] = [e for e in expect if time.time() - e["t"] < 6 * 3600][-19:]
+            expect.append({"page": d["url"], "title": d["title"],
+                           "version": (build or {}).get("version") or d["version"],
+                           "size": d["size"] if latest else 0, "t": time.time()})
+            self._save_settings()
+        return {"open": target, "title": d["title"]}
+
+    def _tm_match_download(self, cand) -> None:
+        """Link a fresh download to the TruckyMods page it came from."""
+        page = truckymods.page_of(cand.source)
+        if page:
+            cand.source = page
+            return
+        if cand.source:
+            return
+        pending = [e for e in self.settings.get("tm_expect", []) if cand.mtime >= e["t"] - 60]
+        hit = next((e for e in pending if e.get("size") and e["size"] == cand.size), None)
+        if hit is None and len(pending) == 1 and not pending[0].get("size"):
+            hit = pending[0]
+        if hit:
+            cand.source = hit["page"]
+
+    @property
+    def tm_auto(self) -> bool:
+        return self.settings.get("auto_trucky_check", True)
+
+    def set_tm_auto(self, on: bool) -> None:
+        self.settings["auto_trucky_check"] = bool(on)
+        self._save_settings()
+
+    def tm_status(self) -> dict:
+        with self.lock:
+            linked = sum(1 for m in self.mods if self._tm_page(m))
+        return {"auto": self.tm_auto, "checked": self.settings.get("tm_checked", 0),
+                "linked": linked, "updates": len(self.tm_updates), "running": self.tm_checking}
+
+    def tm_check_updates(self, force: bool = False) -> dict:
+        """Compare mods installed from TruckyMods with the site. Slow on purpose
+        (polite pace), so the server runs it in a thread, at most once a day."""
+        if self.tm_checking:
+            return self.tm_status()
+        if not force and (not self.tm_auto or time.time() - self.settings.get("tm_checked", 0) < self.TM_CHECK_EVERY):
+            return self.tm_status()
+        self.tm_checking = True
+        try:
+            with self.lock:
+                linked = [(m.key, m.version, self._tm_page(m)) for m in self.mods if self._tm_page(m)]
+            found: Dict[str, dict] = {}
+            for key, version, page in linked[:80]:
+                try:
+                    d = self.tm.mod(page)
+                except truckymods.TruckyError:
+                    continue
+                if truckymods.is_newer(d["version"], version):
+                    found[key] = {"remote": d["version"], "local": version, "url": page, "title": d["title"],
+                                  "game_versions": d["game_versions"]}
+            with self.lock:
+                self.tm_updates = found
+                self.settings["tm_checked"] = time.time()
+                self._save_settings()
+                self._recheck()
+        finally:
+            self.tm_checking = False
+        return self.tm_status()
+
+    def _tm_issues(self, active_keys) -> List[checks.Issue]:
+        out = []
+        for key, u in self.tm_updates.items():
+            m = self.by_key.get(key)
+            if not m:
+                continue
+            for_game = (" для версии игры " + ", ".join(u["game_versions"])) if u["game_versions"] else ""
+            urgent = key in active_keys and m.compatible_with(self.game_version) is False
+            out.append(checks.Issue(
+                "tm_update", checks.WARNING if urgent else checks.INFO,
+                f"На TruckyMods вышла версия {u['remote']} мода «{m.name}»",
+                f"У вас {u['local'] or 'версия без номера'}. Новая версия{for_game}.",
+                "Нажмите «Скачать на TruckyMods»: откроется страница скачивания, а когда файл скачается, "
+                "DeckHaul предложит поставить его вместо старой версии.",
+                mod=key, action="tm_download", extra={"url": u["url"]},
+            ))
+        return out
 
     # --------------------------------------------------------------- mod sets
     @property

@@ -193,6 +193,7 @@ function issueActions(i) {
   if (i.action === "switch_workshop") out.push(`<button class="btn small" data-act="switch-ws" data-local="${esc(i.extra.local)}" data-ws="${esc(i.extra.workshop)}">Переключиться на Workshop</button>`);
   if (i.code === "incompatible" && i.extra.source) out.push(`<a class="btn small" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(i.extra.source)}">Страница мода</a>`);
   if (i.code === "incompatible" && !i.extra.workshop_id && i.mod) out.push(`<button class="btn small" data-act="ws-find" data-key="${esc(i.mod)}">Найти в Workshop</button>`);
+  if (i.action === "tm_download") out.push(`<button class="btn small" data-act="tm-download" data-url="${esc(i.extra.url)}">Скачать на TruckyMods</button>`);
   if (i.action === "compat_ok") out.push(`<button class="btn small" data-act="compat-ok" data-key="${esc(i.mod)}">Работает, не предупреждать</button>`);
   if (i.action === "autosort") out.push(`<button class="btn small" data-act="autosort">Упорядочить</button>`);
   if (i.code === "conflict") out.push(`<button class="btn small" data-act="conflicts" data-key="${esc(i.mod)}">Какие файлы</button>`);
@@ -509,6 +510,7 @@ function showTab(name) {
   if (name === "backups") renderBackups();
   if (name === "history") loadPrelaunch();
   if (name === "sets") loadSets();
+  if (name === "catalog" && !TM.loaded) tmLoad("trending");
   if (name === "mods") loadDisk();
   if (name === "install") loadDownloads(true);
 }
@@ -745,6 +747,111 @@ $("pl-copy").addEventListener("click", async () => {
   }
   toast("Строка скопирована. Вставьте её в параметры запуска игры в Steam.");
 });
+// ------------------------------------------------------------- TruckyMods
+const TM = { loaded: false, kind: "trending", value: "", page: 1, items: [] };
+const TM_CATEGORY = {
+  maps: "Карта", "map-patches": "Патч для карт", trucks: "Грузовик", "truck-patches": "Патч для грузовика",
+  trailers: "Прицеп", sounds: "Звук", "ai-traffic": "Трафик", "truck-paint-jobs": "Покраска грузовика",
+  "trailer-paint-jobs": "Покраска прицепа", "cabin-accessories": "Салон", bus: "Автобус", other: "Другое",
+};
+
+async function tmLoad(kind, value = "", more = false) {
+  await run(more ? "Загружаю ещё" : "Загружаю каталог", async () => {
+    const page = more ? TM.page + 1 : 1;
+    const r = await api(`/api/trucky/list?kind=${kind}&value=${encodeURIComponent(value)}&page=${page}`);
+    Object.assign(TM, { loaded: true, kind, value, page });
+    TM.items = more ? TM.items.concat(r.items.filter((i) => !TM.items.some((x) => x.url === i.url))) : r.items;
+    $("tm-more").hidden = kind === "trending" || r.items.length < 10;
+    renderTm();
+  });
+}
+
+function renderTm() {
+  const title = TM.kind === "search" ? `Найдено по запросу «${TM.value}»` : TM.kind === "category"
+    ? `Категория «${TM_CATEGORY[TM.value] || TM.value}»` : "Популярное за неделю";
+  $("tm-status").textContent = `${title}: ${TM.items.length}`;
+  $("tm-results").innerHTML = TM.items.map((c) => `<button class="tm-card" data-act="tm-open" data-url="${esc(c.url)}">
+      ${c.image ? `<img src="${esc(c.image)}" alt="" loading="lazy">` : `<span class="tm-noimg"></span>`}
+      <span class="tm-body">
+        <span class="name">${esc(c.title)}</span>
+        <span class="meta">${esc(TM_CATEGORY[c.category] || c.category)}${c.author ? " · " + esc(c.author) : ""}</span>
+        <span class="meta">↓ ${c.downloads.toLocaleString("ru-RU")}${c.rating ? ` · ★ ${c.rating}` : ""}
+          ${c.update ? ` · <span class="flag-warning">есть обновление</span>` : c.installed ? ` · <span class="state-on">установлен</span>` : ""}</span>
+      </span>
+    </button>`).join("") || `<div class="empty"><b class="neutral">Ничего не нашлось</b>Попробуйте другой запрос или категорию.</div>`;
+}
+
+async function tmOpen(url) {
+  await run("Открываю мод", async () => {
+    const d = await api("/api/trucky/mod?url=" + encodeURIComponent(url));
+    const compat = d.compat === null ? "совместимость не указана"
+      : d.compat ? `<span class="state-on">✓ подходит к вашей версии ${esc(d.game_version)}</span>`
+      : `<span class="flag-warning">▲ для ${esc(d.game_versions.join(", "))}, у вас ${esc(d.game_version)}</span>`;
+    const missingDlc = d.dlcs.filter((x) => x.installed === false);
+    const dlc = d.dlcs.length ? `<p class="meta">Нужны DLC: ${d.dlcs.map((x) =>
+        x.installed === false ? `<a class="flag-error" target="_blank" rel="noopener" href="https://store.steampowered.com/app/${Number(x.app_id)}/">✖ ${esc(x.name)}</a>`
+        : x.installed ? `✓ ${esc(x.name)}` : esc(x.name)).join(", ")}</p>` : "";
+    const req = d.required_mods.length ? `<p class="meta">Нужны моды: ${d.required_mods.map((r) =>
+        `${r.installed ? "✓" : "✖"} <button class="linkish" data-act="tm-open" data-url="${esc(r.url)}">${esc(r.title)}</button>`).join(", ")}</p>` : "";
+    const inst = d.installed ? `<p>${d.update_available
+        ? `<span class="flag-warning">У вас версия ${esc(d.installed.version || "без номера")}, на сайте ${esc(d.version)}.</span>`
+        : `<span class="state-on">Установлен: ${esc(d.installed.name)} ${esc(d.installed.version || "")}</span>`}</p>` : "";
+    const builds = d.builds.map((b) => `<li>
+        <span><b>${esc(b.version)}</b> <span class="meta">${esc(b.date)} · игра ${esc(b.game_versions.join(", ") || "?")}</span>
+          ${b.build_id === d.best_build && d.best_fits ? `<span class="state-on"> · подходит к вашей версии игры</span>` : ""}
+          ${b.changes ? `<div class="meta">${esc(b.changes)}</div>` : ""}</span>
+        <button class="btn small" data-act="tm-download" data-url="${esc(d.url)}" data-build="${b.build_id}">Скачать</button>
+      </li>`).join("");
+    $("dialog-title").textContent = d.title;
+    $("dialog-body").innerHTML = `
+      ${d.images[0] ? `<img class="tm-hero" src="${esc(d.images[0])}" alt="">` : ""}
+      <p class="meta">${esc(d.author)} · версия ${esc(d.version || "?")} · обновлён ${esc(d.updated || "?")}
+        ${d.size ? " · " + fmtSize(d.size) : ""} · скачиваний ${d.downloads.toLocaleString("ru-RU")}</p>
+      <p>${compat}</p>${inst}${dlc}${req}
+      ${d.compat === false && !d.best_fits ? `<p class="meta">Версии под вашу игру на сайте нет. Новая версия может не заработать, проверьте её в игре или дождитесь обновления.</p>` : ""}
+      ${missingDlc.length ? `<p class="flag-error">Без этих DLC мод не заработает или будет работать с ошибками.</p>` : ""}
+      ${d.description ? `<p class="desc">${esc(d.description)}</p>` : ""}
+      <div class="btns">
+        <button class="btn primary" data-act="tm-download" data-url="${esc(d.url)}"${d.best_build ? ` data-build="${d.best_build}"` : ""}>Скачать на TruckyMods</button>
+        <a class="btn" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(d.url)}">Страница мода</a>
+      </div>
+      ${d.login_required ? `<p class="meta">Для скачивания этого мода сайт попросит войти в аккаунт TruckyMods.</p>` : ""}
+      ${builds ? `<h3>Версии</h3><ul class="tm-builds">${builds}</ul>` : ""}`;
+    if (!$("dialog").open) $("dialog").showModal();
+  });
+}
+
+async function tmDownload(url, build) {
+  await run("Открываю страницу скачивания", async () => {
+    const r = await api("/api/trucky/download", { url, build_id: build ? Number(build) : null });
+    const w = window.open(r.open, "_blank", "noopener");
+    toast(w === null
+      ? "Браузер не открыл новое окно. Откройте ссылку «Страница мода» и скачайте мод там."
+      : "Страница скачивания открыта. Когда файл скачается, DeckHaul предложит установить его на вкладке «Установка».", 8000);
+  });
+}
+
+$("tm-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  tmLoad("search", $("tm-query").value.trim());
+});
+$("tm-category").addEventListener("change", (e) => { if (e.target.value) tmLoad("category", e.target.value); });
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.act === "tm-trending") return tmLoad("trending");
+  if (t.dataset.act === "tm-more") return tmLoad(TM.kind, TM.value, true);
+  if (t.dataset.act === "tm-open") return tmOpen(t.dataset.url);
+  if (t.dataset.act === "tm-download") return tmDownload(t.dataset.url, t.dataset.build);
+});
+
+async function tmAuto() {
+  try {
+    const st = await api("/api/trucky/check", {});
+    if (st.running) setTimeout(async () => { try { setState(await api("/api/state"), isDirty()); } catch (e) {} }, 60000);
+  } catch (e) { /* offline */ }
+}
+
 // ------------------------------------------------------------ disk space
 let UNUSED = new Set();
 let DISK = null;
@@ -904,7 +1011,7 @@ document.addEventListener("click", (e) => {
 window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 
 // keyboard tab switching (Steam Deck desktop mode maps L1/R1 to keys only in some layouts)
-const TABS = ["issues", "install", "order", "mods", "sets", "history", "backups"];
+const TABS = ["issues", "catalog", "install", "order", "mods", "sets", "history", "backups"];
 function cycleTab(d) {
   const i = TABS.indexOf(currentTab());
   showTab(TABS[(i + d + TABS.length) % TABS.length]);
@@ -1200,4 +1307,4 @@ document.addEventListener("click", (e) => {
 });
 
 setInterval(() => fetch("/api/ping").catch(() => {}), 30000);
-load().then(() => { loadDownloads(false); loadUpdate(); workshopAuto(); }).catch((e) => toast(e.message, 0));
+load().then(() => { loadDownloads(false); loadUpdate(); workshopAuto(); tmAuto(); }).catch((e) => toast(e.message, 0));

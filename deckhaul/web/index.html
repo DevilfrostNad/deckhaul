@@ -22,6 +22,7 @@
 
 <nav class="tabs" role="tablist" aria-label="Разделы">
   <button role="tab" data-tab="issues" aria-selected="true">Проблемы <span class="count" id="c-issues"></span></button>
+  <button role="tab" data-tab="catalog">Каталог</button>
   <button role="tab" data-tab="install">Установка <span class="count" id="c-install"></span></button>
   <button role="tab" data-tab="order">Порядок <span class="count" id="c-order"></span></button>
   <button role="tab" data-tab="mods">Все моды <span class="count" id="c-mods"></span></button>
@@ -32,6 +33,40 @@
 
 <main>
   <section id="tab-issues" class="tab" role="tabpanel"></section>
+
+  <section id="tab-catalog" class="tab" role="tabpanel" hidden>
+    <div class="catalog-head">
+      <form id="tm-form" class="dir-form">
+        <label class="sr" for="tm-query">Поиск модов на TruckyMods</label>
+        <input id="tm-query" class="search" type="search" placeholder="Поиск на TruckyMods: Scania, ProMods, звук…">
+        <button class="btn primary" type="submit">Найти</button>
+      </form>
+      <div class="filters">
+        <button class="btn small" data-act="tm-trending">Популярное за неделю</button>
+        <select id="tm-category" aria-label="Категория">
+          <option value="">Категория…</option>
+          <option value="maps">Карты</option>
+          <option value="map-patches">Патчи для карт</option>
+          <option value="trucks">Грузовики</option>
+          <option value="truck-patches">Патчи для грузовиков</option>
+          <option value="trailers">Прицепы</option>
+          <option value="sounds">Звуки</option>
+          <option value="ai-traffic">Трафик</option>
+          <option value="truck-paint-jobs">Покраски грузовиков</option>
+          <option value="trailer-paint-jobs">Покраски прицепов</option>
+          <option value="cabin-accessories">Салон</option>
+          <option value="bus">Автобусы</option>
+          <option value="other">Другое</option>
+        </select>
+      </div>
+      <p class="hint">Каталог <a href="https://truckymods.io" target="_blank" rel="noopener">TruckyMods</a>.
+        Скачивание идёт через официальную страницу сайта: так автор мода получает вознаграждение.
+        Когда файл скачается, DeckHaul сам предложит его установить на вкладке «Установка».</p>
+      <p id="tm-status" class="meta"></p>
+    </div>
+    <div id="tm-results" class="tm-grid"></div>
+    <div id="tm-more" class="btns" hidden><button class="btn" data-act="tm-more">Показать ещё</button></div>
+  </section>
 
   <section id="tab-install" class="tab" role="tabpanel" hidden>
     <div class="install-head">
