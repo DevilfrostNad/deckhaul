@@ -139,6 +139,7 @@ function changed() {
 
 // ---------------------------------------------------------------- render
 function renderAll() {
+  if (typeof renderQueue === "function") renderQueue();
   renderTop();
   renderIssues();
   renderOrder();
@@ -818,6 +819,7 @@ async function tmOpen(url) {
       ${d.description ? `<p class="desc">${esc(d.description)}</p>` : ""}
       <div class="btns">
         <button class="btn primary" data-act="tm-download" data-url="${esc(d.url)}"${d.best_build ? ` data-build="${d.best_build}"` : ""}>Скачать на TruckyMods</button>
+        <button class="btn" data-act="tm-later" data-url="${esc(d.url)}"${d.best_build ? ` data-build="${d.best_build}"` : ""}>Скачать позже</button>
         <a class="btn" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(d.url)}">Страница мода</a>
       </div>
       ${d.login_required ? `<p class="meta">Для скачивания этого мода сайт попросит войти в аккаунт TruckyMods.</p>` : ""}
@@ -826,14 +828,86 @@ async function tmOpen(url) {
   });
 }
 
+// Steam's built-in browser shows pages but cannot save files.
+const IN_STEAM_BROWSER = /Valve Steam|GameOverlay|Tenfoot/i.test(navigator.userAgent);
+let tmWin = null;          // the download window DeckHaul opened, closed when the file arrives
+let tmWaiting = null;      // TruckyMods page whose file we wait for
+
+function openBlank() {
+  // Must happen right in the click handler, before any await, or the browser
+  // blocks the pop-up. about:blank first: the page cannot reach back into
+  // DeckHaul, yet DeckHaul keeps the handle to close it when the file arrives.
+  const w = window.open("about:blank", "_blank");
+  if (w) { try { w.opener = null; } catch (e) { /* ignore */ } }
+  return w;
+}
+
+function tmDownloadDone(item) {
+  if (!tmWaiting || item.source !== tmWaiting) return;
+  tmWaiting = null;
+  if (tmWin && !tmWin.closed) { try { tmWin.close(); } catch (e) { /* ignore */ } }
+  tmWin = null;
+  showTab("install");
+  toast(`«${item.name}» скачан. Проверьте и нажмите «Установить».`, 8000);
+}
+
+function noBrowserDialog(url, build) {
+  $("dialog-title").textContent = "Нужен браузер для скачивания";
+  $("dialog-body").innerHTML = `
+    <p>Сейчас DeckHaul открыт во встроенном браузере Steam. Он показывает страницы, но не умеет сохранять файлы,
+      поэтому мод так не скачается.</p>
+    <p><b>Вариант 1.</b> Добавьте мод в «Скачать позже». Когда откроете DeckHaul в режиме рабочего стола,
+      он будет в списке на вкладке «Каталог».</p>
+    <p><b>Вариант 2.</b> Один раз установите браузер: режим рабочего стола → Discover → Firefox или Google Chrome.
+      После этого DeckHaul будет скачивать моды и в игровом режиме.</p>
+    <div class="btns"><button class="btn primary" data-act="tm-later" data-url="${esc(url)}"${build ? ` data-build="${esc(build)}"` : ""}>Скачать позже</button></div>`;
+  if (!$("dialog").open) $("dialog").showModal();
+}
+
 async function tmDownload(url, build) {
+  const pre = IN_STEAM_BROWSER ? null : openBlank();
+  let used = false;
   await run("Открываю страницу скачивания", async () => {
     const r = await api("/api/trucky/download", { url, build_id: build ? Number(build) : null });
-    const w = window.open(r.open, "_blank", "noopener");
-    toast(w === null
-      ? "Браузер не открыл новое окно. Откройте ссылку «Страница мода» и скачайте мод там."
-      : "Страница скачивания открыта. Когда файл скачается, DeckHaul предложит установить его на вкладке «Установка».", 8000);
+    const env = S.env || {};
+    const page = url.replace(/\/download\/.*$/, "");
+    if (IN_STEAM_BROWSER) {
+      if (!env.browser) return noBrowserDialog(page, build);
+      const o = await api("/api/open-external", { url: r.open });
+      if (!o.opened) return noBrowserDialog(page, build);
+      tmWaiting = page;
+      toast(`Страница скачивания открыта в ${o.opened}. ` + (env.game_mode
+        ? "Когда файл скачается, вернитесь в DeckHaul кнопкой Steam → переключение окон. Он предложит установку."
+        : "Когда файл скачается, DeckHaul предложит его установить."), 10000);
+      return;
+    }
+    if (!pre) {
+      toast("Браузер не открыл новое окно. Откройте «Страница мода» и скачайте мод там.", 8000);
+      return;
+    }
+    pre.location.href = r.open;
+    used = true;
+    tmWin = pre;
+    tmWaiting = page;
+    toast(env.game_mode
+      ? "Страница скачивания открыта. Когда файл скачается, окно закроется само и вы вернётесь сюда."
+      : "Страница скачивания открыта. Когда файл скачается, DeckHaul предложит его установить.", 9000);
   });
+  if (pre && !used) { try { pre.close(); } catch (e) { /* ignore */ } }
+}
+
+function renderQueue() {
+  const q = (S && S.tm_queue) || [];
+  const el = $("tm-queue");
+  el.hidden = !q.length;
+  el.innerHTML = q.length ? `<h2>Скачать позже: ${q.length}</h2>
+    <p class="hint">${(S.env || {}).browser && !IN_STEAM_BROWSER
+      ? "Нажмите «Скачать», файл попадёт в «Загрузки», и DeckHaul предложит его установить."
+      : "Скачайте их, когда откроете DeckHaul на рабочем столе в Firefox или Chrome."}</p>
+    <ul class="points">${q.map((x) => `<li><span class="when">${fmtDate(x.t)}</span>
+      <span class="pt-body"><b>${esc(x.title)}</b> <span class="meta">${esc(x.version || "")}${x.size ? " · " + fmtSize(x.size) : ""}</span></span>
+      <span class="pt-btns"><button class="btn small primary" data-act="tm-download" data-url="${esc(x.url)}"${x.build_id ? ` data-build="${x.build_id}"` : ""}>Скачать</button>
+      <button class="btn small" data-act="tm-unqueue" data-url="${esc(x.url)}">Убрать</button></span></li>`).join("")}</ul>` : "";
 }
 
 $("tm-form").addEventListener("submit", (e) => {
@@ -848,6 +922,16 @@ document.addEventListener("click", (e) => {
   if (t.dataset.act === "tm-more") return tmLoad(TM.kind, TM.value, true);
   if (t.dataset.act === "tm-open") return tmOpen(t.dataset.url);
   if (t.dataset.act === "tm-download") return tmDownload(t.dataset.url, t.dataset.build);
+  if (t.dataset.act === "tm-later") return run("Добавляю", async () => {
+    S.tm_queue = (await api("/api/trucky/queue/add", { url: t.dataset.url, build_id: t.dataset.build ? Number(t.dataset.build) : null })).queue;
+    renderQueue();
+    if ($("dialog").open) $("dialog").close();
+    toast("Добавлено в «Скачать позже» на вкладке «Каталог».");
+  });
+  if (t.dataset.act === "tm-unqueue") return run("Убираю", async () => {
+    S.tm_queue = (await api("/api/trucky/queue/remove", { url: t.dataset.url })).queue;
+    renderQueue();
+  });
 });
 
 async function tmAuto() {
@@ -1085,6 +1169,7 @@ async function loadDownloads(render) {
     return;
   }
   const ready = DL.items.filter((c) => c.status === "ready" && !c.already);
+  ready.forEach(tmDownloadDone);
   $("c-install").textContent = ready.length ? String(ready.length) : "";
   // Files still being analysed count as seen too, so they do not pop up as "new" later.
   const fresh = ready.filter((c) => !seenDownloads.has(c.id));
@@ -1240,7 +1325,8 @@ document.addEventListener("click", (e) => {
 });
 
 setInterval(() => {
-  if (!document.hidden && !busy) loadDownloads(false);
+  // While a download window is open DeckHaul is hidden behind it, keep watching.
+  if ((!document.hidden || tmWaiting) && !busy) loadDownloads(false);
 }, 5000);
 
 // ---------------------------------------------------------------- update

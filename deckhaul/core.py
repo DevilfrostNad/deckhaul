@@ -989,6 +989,9 @@ class App:
             hit = pending[0]
         if hit:
             cand.source = hit["page"]
+        if cand.source and any(q["url"] == cand.source for q in self.settings.get("tm_queue", [])):
+            self.settings["tm_queue"] = [q for q in self._queue if q["url"] != cand.source]
+            self._save_settings()
 
     @property
     def tm_auto(self) -> bool:
@@ -1061,6 +1064,54 @@ class App:
     def dlc_report(self) -> dict:
         st = self.dlc_state()
         return st.public() if st else {}
+
+    # ------------------------------------------------ browser & later downloads
+    OPEN_ALLOWED = ("https://truckymods.io/", "https://store.steampowered.com/", "https://steamcommunity.com/",
+                    "https://github.com/DevilfrostNad/deckhaul")
+
+    def environment(self) -> dict:
+        """Where DeckHaul runs: game mode or desktop, and which real browser exists."""
+        if not hasattr(self, "_browser"):
+            self._browser = paths.find_browser()
+        return {"game_mode": paths.game_mode(), "browser": self._browser[1] if self._browser else None}
+
+    def open_external(self, url: str) -> dict:
+        """Open a page in a real browser (one that can save files)."""
+        import subprocess
+        if not any(url.startswith(p) for p in self.OPEN_ALLOWED):
+            raise UserError("DeckHaul открывает только страницы TruckyMods, Steam и GitHub")
+        self.environment()
+        if not self._browser:
+            return {"opened": None}
+        cmd, name = self._browser
+        try:
+            subprocess.Popen(cmd + [url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError as exc:
+            raise UserError(f"Не удалось запустить {name}: {exc}")
+        return {"opened": name}
+
+    @property
+    def _queue(self) -> List[dict]:
+        return self.settings.setdefault("tm_queue", [])
+
+    def queue_add(self, url: str, build_id: Optional[int] = None) -> List[dict]:
+        try:
+            d = self.tm.mod(url)          # may hit the network: outside the lock
+        except truckymods.TruckyError as exc:
+            raise UserError(str(exc))
+        with self.lock:
+            if not any(q["url"] == d["url"] for q in self._queue):
+                self._queue.append({"url": d["url"], "title": d["title"], "version": d["version"],
+                                    "build_id": build_id, "size": d["size"], "t": time.time()})
+                self._save_settings()
+            return list(self._queue)
+
+    def queue_remove(self, url: str) -> List[dict]:
+        with self.lock:
+            self.settings["tm_queue"] = [q for q in self._queue if q["url"] != url]
+            self._save_settings()
+            return list(self._queue)
 
     # --------------------------------------------------------------- mod sets
     @property
@@ -1286,6 +1337,8 @@ class App:
             return {
                 "app": {"version": __version__, "scanned_at": self.scanned_at},
                 "scan": dict(self.scan_state),
+                "env": self.environment(),
+                "tm_queue": list(self.settings.get("tm_queue", [])),
                 "layout": self.layout.to_dict() if self.layout else None,
                 "game_version": self.game_version,
                 "game_version_full": self.full_version,

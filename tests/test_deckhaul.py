@@ -541,6 +541,68 @@ class SteamDlc(_FakeDeck):
         self.assertEqual(info["dlc"]["installed"], [227310, 304212])
 
 
+class BrowserAndQueue(_FakeDeck):
+    URL = "https://truckymods.io/euro-truck-simulator-2/maps/test-map-123"
+
+    def _app(self):
+        import tm_samples
+        app = self.App()
+        app.tm.fetch = lambda url: tm_samples.MOD
+        app.refresh()
+        return app
+
+    def test_open_external(self):
+        app = self._app()
+        with self.assertRaises(Exception):
+            app.open_external("https://evil.example/download")         # only known sites
+        app._browser = None
+        self.assertEqual(app.open_external(self.URL), {"opened": None})  # no browser: say so, no crash
+        launched = []
+        import subprocess
+        orig = subprocess.Popen
+        subprocess.Popen = lambda cmd, **kw: launched.append(cmd)
+        try:
+            app._browser = (["flatpak", "run", "org.mozilla.firefox"], "Firefox")
+            self.assertEqual(app.open_external(self.URL + "/download/latest")["opened"], "Firefox")
+        finally:
+            subprocess.Popen = orig
+        self.assertEqual(launched, [["flatpak", "run", "org.mozilla.firefox", self.URL + "/download/latest"]])
+
+    def test_game_mode_detection(self):
+        from deckhaul import paths
+        old = dict(os.environ)
+        try:
+            for k in ("GAMESCOPE_WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "SteamGamepadUI"):
+                os.environ.pop(k, None)
+            self.assertFalse(paths.game_mode())
+            os.environ["GAMESCOPE_WAYLAND_DISPLAY"] = "gamescope-0"
+            self.assertTrue(paths.game_mode())
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_queue_cleared_when_file_arrives(self):
+        app = self._app()
+        q = app.queue_add(self.URL, 902)
+        self.assertEqual([x["url"] for x in q], [self.URL])
+        self.assertEqual(len(app.queue_add(self.URL)), 1)               # no duplicates
+        self.assertEqual(app.snapshot()["tm_queue"][0]["title"], "Test Map")
+        app.tm_download(self.URL, build_id=902)                         # later, on the desktop
+        from fixture import make_zip, manifest
+        dl = os.path.join(self.home, "Downloads", "Test Map.zip")
+        make_zip(dl, {"manifest.sii": manifest("Test Map", "2.1", cats=("map",)), "map/x.mbd": "m"})
+        with open(dl, "ab") as fh:
+            fh.write(b"\0" * (5000 - os.path.getsize(dl)))
+        old = time.time() - 30
+        os.utime(dl, (old, old))
+        app.settings["tm_expect"][-1]["t"] = old - 10
+        d = app.downloads()
+        while d["pending"]:
+            d = app.downloads()
+        self.assertEqual(app.snapshot()["tm_queue"], [])
+        self.assertEqual(app.queue_remove(self.URL), [])
+
+
 class EndToEnd(_FakeDeck):
 
     def test_full_flow(self):

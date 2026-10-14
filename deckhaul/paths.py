@@ -181,6 +181,46 @@ def game_running(game: Game) -> bool:
     return False
 
 
+def game_mode() -> bool:
+    """Running inside the Steam Deck game mode (gamescope session)."""
+    return bool(os.environ.get("GAMESCOPE_WAYLAND_DISPLAY")
+                or os.environ.get("XDG_CURRENT_DESKTOP", "").lower() == "gamescope"
+                or os.environ.get("SteamGamepadUI") == "1")
+
+
+BROWSERS = [
+    ("flatpak", "com.google.Chrome", "Google Chrome"),
+    ("flatpak", "org.chromium.Chromium", "Chromium"),
+    ("flatpak", "com.microsoft.Edge", "Microsoft Edge"),
+    ("flatpak", "com.brave.Browser", "Brave"),
+    ("flatpak", "org.mozilla.firefox", "Firefox"),
+    ("bin", "google-chrome-stable", "Google Chrome"),
+    ("bin", "chromium", "Chromium"),
+    ("bin", "firefox", "Firefox"),
+]
+
+
+def find_browser():
+    """(command list, name) of a real browser that can save files, or None.
+    Steam's built-in browser cannot, so it never counts."""
+    import shutil
+    import subprocess
+    for kind, ident, name in BROWSERS:
+        if kind == "flatpak":
+            if not shutil.which("flatpak"):
+                continue
+            try:
+                ok = subprocess.run(["flatpak", "info", ident], stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                ok = False
+            if ok:
+                return ["flatpak", "run", ident], name
+        elif shutil.which(ident):
+            return [ident], name
+    return None
+
+
 def state_dir() -> str:
     base = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local/share")
     d = os.environ.get("DECKHAUL_STATE_DIR") or os.path.join(base, "deckhaul")
