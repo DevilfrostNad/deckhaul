@@ -25,6 +25,7 @@
   <button role="tab" data-tab="install">Установка <span class="count" id="c-install"></span></button>
   <button role="tab" data-tab="order">Порядок <span class="count" id="c-order"></span></button>
   <button role="tab" data-tab="mods">Все моды <span class="count" id="c-mods"></span></button>
+  <button role="tab" data-tab="sets">Наборы</button>
   <button role="tab" data-tab="history">Изменения <span class="count" id="c-history"></span></button>
   <button role="tab" data-tab="backups">Точки восстановления</button>
 </nav>
@@ -68,6 +69,7 @@
   </section>
 
   <section id="tab-mods" class="tab" role="tabpanel" hidden>
+    <div id="disk" class="disk"></div>
     <div class="filters">
       <input id="mods-search" class="search" type="search" placeholder="Название, автор или файл" aria-label="Поиск модов">
       <select id="mods-filter" aria-label="Какие моды показать">
@@ -78,12 +80,39 @@
         <option value="workshop">Из Workshop</option>
         <option value="local">Из папки mod</option>
         <option value="update">Нужно обновить</option>
+        <option value="unused">Не включены ни в одном профиле</option>
+      </select>
+      <select id="mods-sort" aria-label="Сортировка">
+        <option value="name">По названию</option>
+        <option value="size">Сначала тяжёлые</option>
       </select>
     </div>
     <table class="mods-table">
-      <thead><tr><th>Мод</th><th>Версия</th><th>Категория</th><th>Совместимость</th><th>Источник</th><th>Где обновлять</th></tr></thead>
+      <thead><tr><th>Мод</th><th>Версия</th><th class="num">Размер</th><th>Категория</th><th>Совместимость</th><th>Источник</th><th>Где обновлять</th></tr></thead>
       <tbody id="mods-body"></tbody>
     </table>
+  </section>
+
+  <section id="tab-sets" class="tab" role="tabpanel" hidden>
+    <div class="points-wrap">
+      <h2>Сохранить текущий порядок как набор</h2>
+      <p class="hint">Набор — это список включённых модов в нужном порядке. Например, «ProMods», «Чистая игра»,
+        «Конвой с друзьями». Переключаться между наборами можно одной кнопкой, перед каждым переключением
+        создаётся точка восстановления.</p>
+      <form id="set-form" class="dir-form">
+        <label class="sr" for="set-name">Название набора</label>
+        <input id="set-name" class="search" type="text" maxlength="80" placeholder="Например: ProMods">
+        <button class="btn primary" type="submit">Сохранить набор</button>
+      </form>
+      <h2>Наборы</h2>
+      <ul id="sets" class="points"></ul>
+      <h2>Набор от друга</h2>
+      <p class="hint">Файл набора можно передать другу. Он увидит, каких модов у него нет, со ссылками на Workshop.</p>
+      <label class="btn" style="display:inline-flex;align-items:center;cursor:pointer">
+        Загрузить набор из файла
+        <input id="set-file" type="file" accept=".json,application/json" class="sr">
+      </label>
+    </div>
   </section>
 
   <section id="tab-history" class="tab" role="tabpanel" hidden>

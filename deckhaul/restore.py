@@ -219,6 +219,25 @@ class RestoreStore:
                     os.rmdir(parent)
         return len(dropped)
 
+    def trash_size(self) -> int:
+        total = 0
+        for dp, _ds, fs in os.walk(self.trash):
+            for f in fs:
+                try:
+                    total += os.path.getsize(os.path.join(dp, f))
+                except OSError:
+                    pass
+        return total
+
+    def empty_trash(self) -> int:
+        """Delete everything in the trash for good. Points that referred to
+        those files can still restore the profile; the files are gone."""
+        freed = self.trash_size()
+        if os.path.isdir(self.trash):
+            shutil.rmtree(self.trash, ignore_errors=True)
+        os.makedirs(self.trash, exist_ok=True)
+        return freed
+
     def delete(self, pid: str) -> None:
         p = self.get(pid)
         if not p.manual:

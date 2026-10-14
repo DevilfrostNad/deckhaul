@@ -304,6 +304,13 @@ a { color: var(--accent); }
 .report { max-width: 900px; margin-top: 32px; }
 .report .btns { display: flex; gap: 8px; flex-wrap: wrap; }
 
+/* ---------- disk */
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.disk { max-width: 980px; margin-bottom: 16px; }
+.disk-stats { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 8px; color: var(--muted); }
+.disk-stats b { display: block; color: var(--text); font-size: var(--fs-l); font-variant-numeric: tabular-nums; }
+.disk .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+
 /* ---------- update */
 .update { max-width: 900px; }
 .update .notes {

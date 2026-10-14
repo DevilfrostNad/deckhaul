@@ -892,6 +892,154 @@ class App:
         )
         return {"mod": me.name, "total": len(me.hashes), "lost": len(rows), "rows": rows[:limit]}
 
+    # --------------------------------------------------------------- mod sets
+    @property
+    def _sets(self) -> List[dict]:
+        return self.settings.setdefault("mod_sets", [])
+
+    def _set_entry(self, key: str, label: str) -> dict:
+        m = self.by_key.get(key)
+        return {"key": key, "label": label or (m.name if m else key),
+                "name": m.name if m else label, "author": m.author if m else "",
+                "version": m.version if m else "", "workshop_id": m.workshop_id if m else None}
+
+    def _resolve(self, entry: dict) -> Optional[str]:
+        """Find an installed mod for a set entry: same key, else same name and author."""
+        if entry.get("key") in self.by_key:
+            return entry["key"]
+        wid = entry.get("workshop_id")
+        if wid:
+            from .mods import workshop_key
+            if workshop_key(int(wid)) in self.by_key:
+                return workshop_key(int(wid))
+        name, author = (entry.get("name") or "").lower(), (entry.get("author") or "").lower()
+        for m in self.mods:
+            if name and m.name.lower() == name and (m.author or "").lower() == author:
+                return m.key
+        return None
+
+    def _set_public(self, s: dict) -> dict:
+        found = [self._resolve(e) for e in s["entries"]]
+        return {"id": s["id"], "name": s["name"], "t": s["t"], "count": len(s["entries"]),
+                "missing": [{"name": e.get("name") or e.get("label") or e["key"], "version": e.get("version"),
+                             "workshop_id": e.get("workshop_id")}
+                            for e, k in zip(s["entries"], found) if k is None]}
+
+    def list_sets(self) -> List[dict]:
+        return [self._set_public(s) for s in self._sets]
+
+    def save_set(self, name: str) -> dict:
+        with self.lock:
+            prof = self._require_profile()
+            name = (name or "").strip()[:80]
+            if not name:
+                raise UserError("Назовите набор")
+            entries = [self._set_entry(e.key, e.label) for e in prof.active]
+            existing = next((s for s in self._sets if s["name"].lower() == name.lower()), None)
+            if existing:
+                existing.update(entries=entries, t=time.time())
+            else:
+                self._sets.append({"id": f"set-{int(time.time() * 1000)}", "name": name,
+                                   "t": time.time(), "entries": entries})
+            self._save_settings()
+            return {"sets": self.list_sets()}
+
+    def apply_set(self, sid: str) -> dict:
+        with self.lock:
+            s = next((x for x in self._sets if x["id"] == sid), None)
+            if s is None:
+                raise UserError("Набор не найден")
+            keys, missing = [], []
+            for e in s["entries"]:
+                k = self._resolve(e)
+                if k is None:
+                    missing.append(e.get("name") or e.get("label") or e["key"])
+                elif k not in keys:
+                    keys.append(k)
+            prof = self._require_profile()
+            if paths.game_running(self.layout.game):
+                raise UserError("Игра запущена. Закройте её перед сменой набора.")
+            point = self._point("set", f"Включён набор «{s['name']}»")
+            profiles.write_order(self.state_dir, prof, self._entries(keys), backup=False)
+            self.history.note("set", f"Включён набор «{s['name']}» в профиле «{prof.name}»", point=point.id)
+            self.refresh()
+            return {"applied": len(keys), "missing": missing}
+
+    def delete_set(self, sid: str) -> None:
+        with self.lock:
+            self.settings["mod_sets"] = [s for s in self._sets if s["id"] != sid]
+            self._save_settings()
+
+    def export_set(self, sid: str) -> dict:
+        s = next((x for x in self._sets if x["id"] == sid), None)
+        if s is None:
+            raise UserError("Набор не найден")
+        return {"deckhaul_set": 1, "game": self.game, "name": s["name"], "mods": s["entries"]}
+
+    def import_set(self, data: dict) -> dict:
+        with self.lock:
+            if not isinstance(data, dict) or data.get("deckhaul_set") != 1 or not isinstance(data.get("mods"), list):
+                raise UserError("Это не файл набора DeckHaul")
+            if data.get("game") and data["game"] != self.game:
+                raise UserError("Этот набор для другой игры")
+            entries = []
+            for e in data["mods"][:2000]:
+                if isinstance(e, dict) and isinstance(e.get("key"), str):
+                    wid = e.get("workshop_id")
+                    entries.append({"key": e["key"][:200], "label": str(e.get("label", ""))[:200],
+                                    "name": str(e.get("name", ""))[:200], "author": str(e.get("author", ""))[:200],
+                                    "version": str(e.get("version", ""))[:50],
+                                    "workshop_id": int(wid) if isinstance(wid, int) or str(wid).isdigit() else None})
+            if not entries:
+                raise UserError("В наборе нет модов")
+            name = (str(data.get("name") or "Набор из файла"))[:80]
+            s = {"id": f"set-{int(time.time() * 1000)}", "name": name, "t": time.time(), "entries": entries}
+            self._sets.append(s)
+            self._save_settings()
+            return self._set_public(s)
+
+    # ------------------------------------------------------------ disk space
+    def disk_usage(self) -> dict:
+        with self.lock:
+            used_anywhere = {e.key for p in self.profiles for e in p.active}
+            local = sum(m.size for m in self.mods if m.source == "local")
+            workshop = sum(m.size for m in self.mods if m.source == "workshop")
+            unused = [m for m in self.mods if m.key not in used_anywhere]
+            free = None
+            if self.layout and self.layout.active:
+                try:
+                    free = shutil.disk_usage(self.layout.active.path).free
+                except OSError:
+                    pass
+            return {
+                "local": local, "workshop": workshop, "free": free,
+                "trash": self.points.trash_size(),
+                "unused": [{"key": m.key, "name": m.name, "size": m.size, "source": m.source,
+                            "workshop_id": m.workshop_id} for m in sorted(unused, key=lambda m: -m.size)],
+            }
+
+    def remove_unused(self, keys: List[str]) -> dict:
+        with self.lock:
+            used_anywhere = {e.key for p in self.profiles for e in p.active}
+            targets = [self.by_key[k] for k in keys if k in self.by_key]
+            targets = [m for m in targets if m.source == "local" and m.key not in used_anywhere]
+            if not targets:
+                raise UserError("Нечего убирать: выбранные моды включены в каком-то профиле или из Workshop")
+            point = self._point("cleanup", f"Убраны неиспользуемые моды: {len(targets)}")
+            journal = []
+            for m in targets:
+                journal.append({"op": "moved", "src": m.path, "dst": self.points.move_to_trash(m.path)})
+            restore.RestoreStore.record(point, journal)
+            self.history.note("cleanup", f"В корзину убрано неиспользуемых модов: {len(targets)}", point=point.id)
+            self.refresh()
+            return {"removed": len(targets), "size": sum(m.size for m in targets)}
+
+    def empty_trash(self) -> int:
+        with self.lock:
+            freed = self.points.empty_trash()
+            self.history.note("trash", f"Корзина DeckHaul очищена, освобождено {freed // (1 << 20)} МБ")
+            return freed
+
     # -------------------------------------------------------- prelaunch check
     def _remember_buildid(self) -> None:
         from .prelaunch import game_buildid

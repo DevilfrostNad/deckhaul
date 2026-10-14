@@ -377,18 +377,21 @@ function renderMods() {
     .filter((m) => !q || [m.name, m.author, m.key, m.path].join(" ").toLowerCase().includes(q))
     .filter((m) => f === "all" || (f === "on" && on.has(m.key)) || (f === "off" && !on.has(m.key)) ||
       (f === "problems" && problem.has(m.key)) || (f === "workshop" && m.source === "workshop") ||
-      (f === "local" && m.source === "local") || (f === "update" && m.needs_update))
-    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+      (f === "local" && m.source === "local") || (f === "update" && m.needs_update) ||
+      (f === "unused" && UNUSED.has(m.key)))
+    .sort($("mods-sort").value === "size" ? (a, b) => (b.size || 0) - (a.size || 0)
+      : (a, b) => a.name.localeCompare(b.name, "ru"));
   $("mods-body").innerHTML = rows.map((m) => `<tr>
       <td><div><button class="linkish" data-act="show" data-key="${esc(m.key)}">${esc(m.name)}</button> ${problem.has(m.key) ? `<span class="flag-warning">▲</span>` : ""}</div><div class="meta">${esc(m.author || "")}</div></td>
       <td>${esc(m.version || "—")}</td>
+      <td class="num">${m.size ? fmtSize(m.size) : "—"}</td>
       <td>${esc(CATEGORY[m.category] || m.category)}</td>
       <td>${m.compat === false ? (m.compat_ok ? "✓ проверен вами" : `<span class="flag-warning">▲ для ${esc(m.compatible.join(", "))}</span>`) : m.compat ? "✓ да" : "не указана"}</td>
       <td>${m.source === "workshop" ? "Workshop" : "папка mod"}${on.has(m.key) ? ` · <span class="state-on">включён</span>` : ""}</td>
       <td>${m.source === "workshop" ? `<span class="meta">обновляет Steam</span>`
         : m.source_url ? `<a href="${esc(m.source_url)}" target="_blank" rel="noopener">${esc(hostOf(m.source_url))}</a>`
         : `<button class="linkish meta" data-act="show" data-key="${esc(m.key)}">указать</button>`}</td>
-    </tr>`).join("") || `<tr><td colspan="6" class="empty">Ничего не нашлось</td></tr>`;
+    </tr>`).join("") || `<tr><td colspan="7" class="empty">Ничего не нашлось</td></tr>`;
 }
 
 function hostOf(url) {
@@ -505,6 +508,8 @@ function showTab(name) {
   document.querySelectorAll(".tab").forEach((t) => (t.hidden = t.id !== "tab-" + name));
   if (name === "backups") renderBackups();
   if (name === "history") loadPrelaunch();
+  if (name === "sets") loadSets();
+  if (name === "mods") loadDisk();
   if (name === "install") loadDownloads(true);
 }
 
@@ -740,6 +745,124 @@ $("pl-copy").addEventListener("click", async () => {
   }
   toast("Строка скопирована. Вставьте её в параметры запуска игры в Steam.");
 });
+// ------------------------------------------------------------ disk space
+let UNUSED = new Set();
+let DISK = null;
+async function loadDisk() {
+  try { DISK = await api("/api/disk"); } catch (e) { return; }
+  UNUSED = new Set(DISK.unused.map((u) => u.key));
+  renderDisk();
+  renderMods();
+}
+function renderDisk() {
+  if (!DISK) return;
+  const unusedLocal = DISK.unused.filter((u) => u.source === "local");
+  const unusedWs = DISK.unused.filter((u) => u.source === "workshop");
+  const sum = (list) => list.reduce((a, u) => a + (u.size || 0), 0);
+  $("disk").innerHTML = `
+    <div class="disk-stats">
+      <div><b>${fmtSize(DISK.local + DISK.workshop)}</b>занимают моды</div>
+      <div><b>${fmtSize(sum(DISK.unused))}</b>не включены ни в одном профиле</div>
+      ${DISK.free !== null ? `<div><b>${fmtSize(DISK.free)}</b>свободно на диске</div>` : ""}
+      <div><b>${fmtSize(DISK.trash)}</b>в корзине DeckHaul</div>
+    </div>
+    <div class="btns">
+      ${unusedLocal.length ? `<button class="btn" data-act="remove-unused">Убрать в корзину неиспользуемые из папки mod: ${unusedLocal.length}, ${fmtSize(sum(unusedLocal))}</button>` : ""}
+      ${DISK.trash ? `<button class="btn" data-act="empty-trash">Очистить корзину и освободить ${fmtSize(DISK.trash)}</button>` : ""}
+    </div>
+    ${unusedWs.length ? `<p class="meta">Ещё ${unusedWs.length} модов из Workshop (${fmtSize(sum(unusedWs))}) не включены нигде. Их удаляет Steam: отпишитесь от них в Workshop. Список — в фильтре «Не включены ни в одном профиле».</p>` : ""}`;
+}
+$("mods-sort").addEventListener("change", renderMods);
+
+// ------------------------------------------------------------- mod sets
+async function loadSets() {
+  try { renderSets((await api("/api/sets")).sets); } catch (e) { toast(e.message); }
+}
+function missingHtml(list) {
+  return list.map((x) => x.workshop_id
+    ? `<a target="_blank" rel="noopener" href="https://steamcommunity.com/sharedfiles/filedetails/?id=${Number(x.workshop_id)}">${esc(x.name)}</a>`
+    : esc(x.name + (x.version ? " " + x.version : ""))).join(", ");
+}
+function renderSets(sets) {
+  $("sets").innerHTML = sets.map((s) => `<li>
+      <span class="when">${fmtDate(s.t)}</span>
+      <span class="pt-body"><div><b>${esc(s.name)}</b></div>
+        <div class="meta">${plural(s.count, "мод", "мода", "модов")}${s.missing.length ? ` · не хватает: ${s.missing.length}` : ""}</div>
+        ${s.missing.length ? `<div class="meta">Нет: ${missingHtml(s.missing)}</div>` : ""}</span>
+      <span class="pt-btns">
+        <button class="btn small primary" data-act="set-apply" data-id="${esc(s.id)}">Включить</button>
+        <button class="btn small" data-act="set-export" data-id="${esc(s.id)}" data-name="${esc(s.name)}">В файл</button>
+        <button class="btn small" data-act="set-delete" data-id="${esc(s.id)}">Удалить</button>
+      </span></li>`).join("") || `<li class="meta">Наборов пока нет. Расставьте моды на вкладке «Порядок», сохраните профиль и сохраните набор здесь.</li>`;
+}
+$("set-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  run("Сохраняю набор", async () => {
+    if (isDirty()) toast("В набор попадёт порядок, сохранённый в профиле, без несохранённых изменений.", 6000);
+    renderSets((await api("/api/sets/save", { name: $("set-name").value })).sets);
+    $("set-name").value = "";
+  });
+});
+$("set-file").addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  run("Читаю набор", async () => {
+    let data;
+    try { data = JSON.parse(await file.text()); } catch (err) { throw new Error("Это не файл набора DeckHaul"); }
+    const r = await api("/api/sets/import", { data });
+    renderSets(r.sets);
+    toast(r.set.missing.length
+      ? `Набор «${r.set.name}» загружен. Не хватает модов: ${r.set.missing.length}, список под набором.`
+      : `Набор «${r.set.name}» загружен, все моды у вас есть.`, 7000);
+    e.target.value = "";
+  });
+});
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("button");
+  if (!t) return;
+  if (t.dataset.act === "set-apply") {
+    if (isDirty() && !confirm("Несохранённый порядок будет потерян. Включить набор?")) return;
+    return run("Включаю набор", async () => {
+      const r = await api("/api/sets/apply", { id: t.dataset.id });
+      setState(r.state);
+      loadSets();
+      toast(`Набор включён: модов ${r.result.applied}.` + (r.result.missing.length ? ` Пропущены, потому что их нет: ${r.result.missing.join(", ")}.` : "") +
+        " Вернуть как было можно на вкладке «Точки восстановления».", 8000);
+    });
+  }
+  if (t.dataset.act === "set-export") return run("Готовлю файл", async () => {
+    const data = await api("/api/sets/export?id=" + encodeURIComponent(t.dataset.id));
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: "application/json" }));
+    a.download = `deckhaul-${t.dataset.name.replace(/[^\wа-яё-]+/gi, "_")}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+  if (t.dataset.act === "set-delete") return run("Удаляю", async () => {
+    renderSets((await api("/api/sets/delete", { id: t.dataset.id })).sets);
+  });
+  if (t.dataset.act === "remove-unused") return run("Убираю в корзину", async () => {
+    const keys = DISK.unused.filter((u) => u.source === "local").map((u) => u.key);
+    const r = await api("/api/disk/remove-unused", { keys });
+    setState(r.state);
+    DISK = r.disk;
+    UNUSED = new Set(DISK.unused.map((u) => u.key));
+    renderDisk(); renderMods();
+    toast(`В корзину убрано модов: ${r.result.removed}. Место освободится, когда очистите корзину. ` +
+      "Вернуть их можно на вкладке «Точки восстановления».", 8000);
+  });
+  if (t.dataset.act === "empty-trash") {
+    if (!confirm("Файлы из корзины будут удалены насовсем. Точки восстановления, которые на них ссылаются, " +
+      "смогут вернуть только профиль, без этих модов. Очистить корзину?")) return;
+    return run("Очищаю корзину", async () => {
+      const r = await api("/api/disk/empty-trash", {});
+      DISK = r.disk;
+      renderDisk();
+      toast(`Освобождено ${fmtSize(r.freed)}.`);
+    });
+  }
+});
+
 $("report").addEventListener("click", () => run("Собираю отчёт", async () => {
   const r = await api("/api/report", {});
   $("report-path").hidden = false;
@@ -781,7 +904,7 @@ document.addEventListener("click", (e) => {
 window.addEventListener("beforeunload", (e) => { if (isDirty()) { e.preventDefault(); e.returnValue = ""; } });
 
 // keyboard tab switching (Steam Deck desktop mode maps L1/R1 to keys only in some layouts)
-const TABS = ["issues", "install", "order", "mods", "history", "backups"];
+const TABS = ["issues", "install", "order", "mods", "sets", "history", "backups"];
 function cycleTab(d) {
   const i = TABS.indexOf(currentTab());
   showTab(TABS[(i + d + TABS.length) % TABS.length]);
@@ -836,6 +959,7 @@ const seenDownloads = new Set();
 let firstDownloadsLoad = true;
 
 function fmtSize(b) {
+  if (!b) return "0 КБ";
   if (b >= 1 << 30) return (b / (1 << 30)).toFixed(1).replace(".", ",") + " ГБ";
   if (b >= 1 << 20) return (b / (1 << 20)).toFixed(1).replace(".", ",") + " МБ";
   return Math.max(1, Math.round(b / 1024)) + " КБ";

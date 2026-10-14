@@ -78,6 +78,13 @@ def _make_handler(app: App, port: int, state: dict):
                 return self._safe(lambda b: app.browse(path or None), {})
             if url.path == "/api/workshop/auto":
                 return self._safe(lambda b: app.workshop_auto(), {})
+            if url.path == "/api/sets":
+                return self._safe(lambda b: {"sets": app.list_sets()}, {})
+            if url.path == "/api/sets/export":
+                sid = parse_qs(url.query).get("id", [""])[0]
+                return self._safe(lambda b: app.export_set(sid), {})
+            if url.path == "/api/disk":
+                return self._safe(lambda b: app.disk_usage(), {})
             if url.path == "/api/prelaunch":
                 return self._safe(lambda b: app.prelaunch_status(), {})
             if url.path == "/api/update":
@@ -142,6 +149,13 @@ def _make_handler(app: App, port: int, state: dict):
                 "/api/downloads/dirs/remove": lambda b: (app.remove_download_dir(b["path"]), app.downloads())[1],
                 "/api/update/check": lambda b: app.update_status(force=True),
                 "/api/report": lambda b: {"path": app.save_report()},
+                "/api/sets/save": lambda b: app.save_set(b.get("name", "")),
+                "/api/sets/apply": lambda b: {"result": app.apply_set(b["id"]), "state": app.snapshot()},
+                "/api/sets/delete": lambda b: (app.delete_set(b["id"]), {"sets": app.list_sets()})[1],
+                "/api/sets/import": lambda b: {"set": app.import_set(b.get("data")), "sets": app.list_sets()},
+                "/api/disk/remove-unused": lambda b: {"result": app.remove_unused(b.get("keys", [])),
+                                                      "state": app.snapshot(), "disk": app.disk_usage()},
+                "/api/disk/empty-trash": lambda b: {"freed": app.empty_trash(), "disk": app.disk_usage()},
                 "/api/update/auto": lambda b: (app.set_auto_update_check(bool(b.get("on"))), app.update_status())[1],
                 "/api/update/apply": self._apply_update,
                 "/api/game-version": lambda b: (app.set_game_version(b.get("version")), app.snapshot())[1],

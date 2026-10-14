@@ -293,6 +293,66 @@ class Prelaunch(_FakeDeck):
         self.assertTrue(prelaunch.configured(227300))
 
 
+class SetsAndDisk(_FakeDeck):
+    def test_save_apply_and_share_sets(self):
+        app = self.App()
+        app.refresh()
+        original = [e.key for e in app.profile.active]
+        app.save_set("Всё подряд")
+        app.apply(["scania_super", "real_sounds"])
+        app.save_set("Минимум")
+        sets = {s["name"]: s for s in app.list_sets()}
+        self.assertEqual(sets["Минимум"]["count"], 2)
+        self.assertEqual([m["name"] for m in sets["Всё подряд"]["missing"]], ["Удалённый мод"])
+
+        r = app.apply_set(sets["Всё подряд"]["id"])
+        self.assertEqual(r["missing"], ["Удалённый мод"])
+        self.assertEqual([e.key for e in app.profile.active], [k for k in original if k != "gone_mod"])
+        self.assertEqual(app.list_points()[0]["reason"], "set")          # undoable
+
+        exported = app.export_set(sets["Минимум"]["id"])
+        self.assertEqual(exported["deckhaul_set"], 1)
+        friend = dict(exported, name="От друга", mods=exported["mods"] + [
+            {"key": "mod_workshop_package.0000000000000ABC", "name": "Чужой мод", "workshop_id": 2748}])
+        imported = app.import_set(json.loads(json.dumps(friend)))
+        self.assertEqual(imported["missing"], [{"name": "Чужой мод", "version": "", "workshop_id": 2748}])
+        with self.assertRaises(Exception):
+            app.import_set({"hello": "world"})
+        with self.assertRaises(Exception):
+            app.import_set(dict(exported, game="ats"))
+
+    def test_set_finds_mod_renamed_by_update(self):
+        app = self.App()
+        app.refresh()
+        app.save_set("Звук")
+        os.rename(os.path.join(app.layout.active.mod_dir, "real_sounds.scs"),
+                  os.path.join(app.layout.active.mod_dir, "real_sounds_v5.scs"))
+        app.refresh()
+        s = app.list_sets()[0]
+        self.assertNotIn("Real Sounds", [m["name"] for m in s["missing"]])  # found by name and author
+
+    def test_disk_cleanup(self):
+        app = self.App()
+        app.refresh()
+        d = app.disk_usage()
+        unused = {u["key"] for u in d["unused"]}
+        self.assertIn("my_paint", unused)
+        self.assertNotIn("scania_super", unused)                         # enabled in the profile
+        self.assertGreater(d["local"], 0)
+        with self.assertRaises(Exception):
+            app.remove_unused(["scania_super"])
+        r = app.remove_unused(["my_paint", "scania_super_old"])
+        self.assertEqual(r["removed"], 2)
+        self.assertNotIn("my_paint", app.by_key)
+        self.assertGreater(app.disk_usage()["trash"], 0)
+        app.rollback(app.list_points()[0]["id"])
+        self.assertIn("my_paint", app.by_key)                            # cleanup is undoable
+        app.remove_unused(["my_paint"])
+        freed = app.empty_trash()
+        self.assertGreater(freed, 0)
+        self.assertEqual(app.disk_usage()["trash"], 0)
+
+
 class EndToEnd(_FakeDeck):
 
     def test_full_flow(self):
