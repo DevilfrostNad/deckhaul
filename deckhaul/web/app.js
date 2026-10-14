@@ -787,10 +787,14 @@ async function tmOpen(url) {
     const compat = d.compat === null ? "совместимость не указана"
       : d.compat ? `<span class="state-on">✓ подходит к вашей версии ${esc(d.game_version)}</span>`
       : `<span class="flag-warning">▲ для ${esc(d.game_versions.join(", "))}, у вас ${esc(d.game_version)}</span>`;
-    const missingDlc = d.dlcs.filter((x) => x.installed === false);
+    const store = (x, text, cls) => `<a class="${cls}" target="_blank" rel="noopener" href="https://store.steampowered.com/app/${Number(x.app_id)}/">${text}</a>`;
+    const missingDlc = d.dlcs.filter((x) => x.status === "not_found");
+    const offDlc = d.dlcs.filter((x) => x.status === "disabled");
     const dlc = d.dlcs.length ? `<p class="meta">Нужны DLC: ${d.dlcs.map((x) =>
-        x.installed === false ? `<a class="flag-error" target="_blank" rel="noopener" href="https://store.steampowered.com/app/${Number(x.app_id)}/">✖ ${esc(x.name)}</a>`
-        : x.installed ? `✓ ${esc(x.name)}` : esc(x.name)).join(", ")}</p>` : "";
+        x.status === "installed" ? `<span class="state-on">✓ ${esc(x.name)}</span>`
+        : x.status === "disabled" ? store(x, `⦸ ${esc(x.name)} (отключено в Steam)`, "flag-warning")
+        : x.status === "not_found" ? store(x, `▲ ${esc(x.name)}`, "flag-warning")
+        : esc(x.name)).join(", ")}</p>` : "";
     const req = d.required_mods.length ? `<p class="meta">Нужны моды: ${d.required_mods.map((r) =>
         `${r.installed ? "✓" : "✖"} <button class="linkish" data-act="tm-open" data-url="${esc(r.url)}">${esc(r.title)}</button>`).join(", ")}</p>` : "";
     const inst = d.installed ? `<p>${d.update_available
@@ -809,7 +813,8 @@ async function tmOpen(url) {
         ${d.size ? " · " + fmtSize(d.size) : ""} · скачиваний ${d.downloads.toLocaleString("ru-RU")}</p>
       <p>${compat}</p>${inst}${dlc}${req}
       ${d.compat === false && !d.best_fits ? `<p class="meta">Версии под вашу игру на сайте нет. Новая версия может не заработать, проверьте её в игре или дождитесь обновления.</p>` : ""}
-      ${missingDlc.length ? `<p class="flag-error">Без этих DLC мод не заработает или будет работать с ошибками.</p>` : ""}
+      ${offDlc.length ? `<p class="flag-warning">Отключённые DLC включаются в Steam: свойства игры → «DLC». Без них мод не заработает.</p>` : ""}
+      ${missingDlc.length ? `<p class="meta">DLC с ▲ не найдены среди установленных в Steam. Если они у вас куплены и мод работает, всё в порядке; если нет, без них мод не заработает.</p>` : ""}
       ${d.description ? `<p class="desc">${esc(d.description)}</p>` : ""}
       <div class="btns">
         <button class="btn primary" data-act="tm-download" data-url="${esc(d.url)}"${d.best_build ? ` data-build="${d.best_build}"` : ""}>Скачать на TruckyMods</button>

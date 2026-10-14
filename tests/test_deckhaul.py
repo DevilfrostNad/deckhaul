@@ -454,7 +454,91 @@ class TruckyFlow(_FakeDeck):
         self.assertTrue(d["compat"])                                   # 1.53 is listed
         self.assertEqual(d["best_build"], 801)
         self.assertTrue(d["best_fits"])
-        self.assertIsNone(d["dlcs"][0]["installed"])                   # Steam did not say
+        self.assertEqual(d["dlcs"][0]["status"], "unknown")            # Steam did not say
+
+
+class SteamDlc(_FakeDeck):
+    ACF = """"AppState"
+{
+	"appid"		"227300"
+	"installdir"		"Euro Truck Simulator 2"
+	"buildid"		"100"
+	"UserConfig"
+	{
+		"language"		"english"
+		"DisabledDLC"		"%(disabled)s"
+	}
+	"InstalledDepots"
+	{
+		"227301"
+		{
+			"manifest"		"111"
+			"size"		"9000"
+		}
+		"227311"
+		{
+			"manifest"		"222"
+			"dlcappid"		"227310"
+		}
+		"304213"
+		{
+			"manifest"		"333"
+			"dlcappid"		"304212"
+		}
+	}
+}
+"""
+
+    def _setup(self, disabled=""):
+        apps = os.path.join(self.home, ".local/share/Steam/steamapps")
+        with open(os.path.join(apps, "appmanifest_227300.acf"), "w") as fh:
+            fh.write(self.ACF % {"disabled": disabled})
+        game = os.path.join(apps, "common", "Euro Truck Simulator 2")
+        for n in ("base.scs", "dlc_east.scs", "dlc_north.scs"):
+            open(os.path.join(game, n), "w").close()
+        log = os.path.join(self.home, ".local/share/Euro Truck Simulator 2/game.log.txt")
+        with open(log, "a") as fh:
+            fh.write("00:00:01.000 : [hashfs] dlc_east.scs: Created and validated, 2850 entries\n")
+        app = self.App()
+        app.refresh()
+        return app
+
+    def test_sources_combined(self):
+        st = self._setup().dlc_state()
+        self.assertEqual(st.installed, {227310, 304212})               # dlcappid, not the depot id
+        self.assertEqual(st.depots[227310], 227311)
+        self.assertEqual(st.files, ["dlc_east", "dlc_north"])
+        self.assertEqual(st.mounted, ["dlc_east"])
+        self.assertEqual(st.status(227310), "installed")
+        self.assertEqual(st.status(531130), "not_found")                # Steam lists other DLC, not this one
+
+    def test_disabled_in_steam(self):
+        st = self._setup(disabled="304212").dlc_state()
+        self.assertEqual(st.status(304212), "disabled")
+        self.assertEqual(st.installed, {227310})
+
+    def test_unknown_without_manifest(self):
+        app = self.App()
+        app.refresh()
+        self.assertEqual(app.dlc_state().status(227310), "unknown")    # never a false "missing"
+
+    def test_cli_and_report(self):
+        import io
+        import contextlib
+        import zipfile
+        from deckhaul import __main__ as cli
+        self._setup()
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["dlc"])
+        text = out.getvalue()
+        self.assertIn("227310", text)
+        self.assertIn("dlc_east", text)
+        app = self.App()
+        app.refresh()
+        path = os.path.join(self.home, app.save_report()[2:])
+        info = json.loads(zipfile.ZipFile(path).read("report.json"))
+        self.assertEqual(info["dlc"]["installed"], [227310, 304212])
 
 
 class EndToEnd(_FakeDeck):

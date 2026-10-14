@@ -100,6 +100,7 @@ def build(app) -> bytes:
         "profiles": [{"storage": p["storage"], "writable": p["writable"], "cloud": p["cloud"],
                       "mods": p["active_count"]} for p in snap.get("profiles", [])],
         "active_mods": snap.get("active", []),
+        "dlc": app.dlc_report(),
         "issues": [{"code": i["code"], "severity": i["severity"], "title": i["title"], "mod": i.get("mod")}
                    for i in snap.get("issues", [])],
         "mods": [{

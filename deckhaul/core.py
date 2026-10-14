@@ -941,7 +941,6 @@ class App:
             d = dict(self.tm.mod(url))
         except truckymods.TruckyError as exc:
             raise UserError(str(exc))
-        from .prelaunch import installed_dlc
         gv = self.game_version
         mm = ".".join(gv.split(".")[:2]) if gv else None
         d["game_version"] = gv
@@ -950,8 +949,8 @@ class App:
         best = truckymods.best_build(d, gv)
         d["best_build"] = best["build_id"] if best else None
         d["best_fits"] = bool(best and mm and any(g == mm or g.startswith(mm + ".") for g in best["game_versions"]))
-        owned = installed_dlc(self.layout) if self.layout else None
-        d["dlcs"] = [dict(x, installed=None if owned is None else x["app_id"] in owned) for x in d["dlcs"]]
+        dlc = self.dlc_state()
+        d["dlcs"] = [dict(x, status=dlc.status(x["app_id"]) if dlc else "unknown") for x in d["dlcs"]]
         with self.lock:
             d["required_mods"] = [dict(r, installed=bool(self._tm_installed(r["url"], r["title"])))
                                   for r in d["required_mods"]]
@@ -1051,6 +1050,17 @@ class App:
                 mod=key, action="tm_download", extra={"url": u["url"]},
             ))
         return out
+
+    def dlc_state(self):
+        from . import steamdlc
+        if not self.layout:
+            return None
+        log_path = self.log.path if self.log else None
+        return steamdlc.read(self.layout, log_path)
+
+    def dlc_report(self) -> dict:
+        st = self.dlc_state()
+        return st.public() if st else {}
 
     # --------------------------------------------------------------- mod sets
     @property

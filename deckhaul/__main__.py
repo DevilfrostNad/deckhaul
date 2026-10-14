@@ -14,6 +14,7 @@
   python3 -m deckhaul folders    папки, где искать скачанные моды
   python3 -m deckhaul update     проверить новую версию DeckHaul и установить её
   python3 -m deckhaul report     сохранить отчёт о проблеме в «Загрузки»
+  python3 -m deckhaul dlc        что DeckHaul знает о ваших DLC
   python3 -m deckhaul folder-add ПУТЬ / folder-remove ПУТЬ
 """
 
@@ -50,7 +51,7 @@ def main(argv=None) -> int:
         return prelaunch_main(args[1:])
     ap = argparse.ArgumentParser(prog="deckhaul", description="Менеджер модов ETS2/ATS для Steam Deck")
     ap.add_argument("command", nargs="?", default="serve",
-                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update", "points", "save-point", "rollback", "report"])
+                    choices=["serve", "check", "sort", "profiles", "backups", "restore", "downloads", "install", "folders", "folder-add", "folder-remove", "update", "points", "save-point", "rollback", "report", "dlc"])
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--game", default="ets2", choices=["ets2", "ats"])
     ap.add_argument("--data-dir", help="папка игры с profiles/ и mod/, если не нашлась сама")
@@ -113,6 +114,24 @@ def main(argv=None) -> int:
                 print(f"\nПорядок записан. Вернуть как было: deckhaul rollback {backup}")
             elif new != keys:
                 print("\nЧтобы записать этот порядок, добавьте --apply")
+            return 0
+
+        if a.command == "dlc":
+            st = app.dlc_state()
+            if st is None:
+                print("Игра не найдена.")
+                return 1
+            home = os.path.expanduser("~")
+            print("Манифест Steam: " + (st.manifest.replace(home, "~") if st.manifest else "не найден"))
+            print(f"DLC с установленными файлами (по Steam): {len(st.installed)}")
+            for dlc in sorted(st.installed):
+                depot = st.depots.get(dlc)
+                print(f"  {dlc}" + (f"  (хранилище {depot})" if depot and depot != dlc else ""))
+            print("Отключены в свойствах игры: " + (", ".join(map(str, sorted(st.disabled))) or "нет"))
+            print(f"Архивы dlc_*.scs в папке игры: {len(st.files)}")
+            print("  " + ", ".join(st.files) if st.files else "  нет")
+            print(f"Подключены игрой при последнем запуске: {len(st.mounted)}")
+            print("  " + ", ".join(st.mounted) if st.mounted else "  нет данных в game.log.txt")
             return 0
 
         if a.command == "report":
